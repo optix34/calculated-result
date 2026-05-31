@@ -16,9 +16,7 @@ Ext.define('Store.duplicate_online.Module', {
                 items: [me.buildToolbar()]
             }, {
                 region: 'center',
-                itemId: 'treeContainer',
-                layout: 'fit'
-                // дерево будет добавлено позже
+                items: [me.buildTree()]
             }]
         });
 
@@ -47,7 +45,16 @@ Ext.define('Store.duplicate_online.Module', {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
-            me.loadFullData(navTab); // передаём navTab для последующего добавления дерева
+            me.treeStore.load({
+                callback: function() {
+                    var root = me.treeStore.getRootNode();
+                    if (root) {
+                        root.expandChildren(true, false);
+                        me.tree.getView().refresh();
+                        me.tree.setHeight(navTab.getHeight() - 50);
+                    }
+                }
+            });
         }, 100);
 
         setTimeout(function() { me.initMap(); }, 200);
@@ -70,143 +77,87 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Загрузка данных из двух источников
-    loadFullData: function(navTab) {
+    buildTree: function() {
         var me = this;
-        Ext.Ajax.request({
-            url: '/backend/ax/tree.php',
-            params: {
-                vehs: 1, state: 1, objects: 1, vehicles: 1, full: 1
-            },
-            success: function(treeResponse) {
-                var treeData = Ext.decode(treeResponse.responseText);
-                // Запрашиваем актуальные статусные данные
-                Ext.Ajax.request({
-                    url: '/backend/ax/current_data.php',
-                    method: 'POST',
-                    params: {
-                        cmd: 'getData',
-                        vehicles: 1,
-                        with_last: 1
-                    },
-                    success: function(statusResponse) {
-                        var statusData = Ext.decode(statusResponse.responseText);
-                        me.processAndDisplayData(treeData, statusData, navTab);
-                    },
-                    failure: function() {
-                        console.error('Не удалось загрузить статусные данные, отображаем только дерево.');
-                        me.processAndDisplayData(treeData, {}, navTab);
-                    }
-                });
-            },
-            failure: function() {
-                console.error('Не удалось загрузить данные дерева.');
-                Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные.');
+        me.treeStore = Ext.create('Ext.data.TreeStore', {
+            root: { expanded: true, children: [] },
+            proxy: {
+                type: 'ajax',
+                url: '/backend/ax/tree.php',
+                extraParams: {
+                    vehs: 1,
+                    state: 1,
+                    objects: 1,
+                    vehicles: 1,
+                    full: 1,
+                    units: 1,
+                    devs: 1,
+                    last_update: 1,
+                    last_data: 1,
+                    with_status: 1,
+                    extended: 1
+                },
+                reader: { type: 'json', rootProperty: '' }
             }
         });
-    },
 
-    // Построение дерева с объединёнными данными
-    processAndDisplayData: function(treeData, statusData, navTab) {
-        var me = this;
-        if (!me.treeStore) {
-            me.treeStore = Ext.create('Ext.data.TreeStore', { root: { expanded: true, children: [] } });
-            me.tree = Ext.create('Ext.tree.Panel', {
-                store: me.treeStore,
-                rootVisible: false,
-                columns: [{
-                    xtype: 'treecolumn',
-                    text: 'Объекты',
-                    dataIndex: 'name',
-                    flex: 2,
-                    renderer: function(v, meta, record) {
-                        return v || record.get('text') || record.get('id') || '—';
+        me.tree = Ext.create('Ext.tree.Panel', {
+            store: me.treeStore,
+            rootVisible: false,
+            columns: [{
+                xtype: 'treecolumn',
+                text: 'Объекты',
+                dataIndex: 'name',
+                flex: 2,
+                renderer: function(v, meta, record) {
+                    return v || record.get('text') || record.get('id') || '—';
+                }
+            }, {
+                text: 'Статус',
+                dataIndex: 'active',
+                width: 100,
+                renderer: function(v, meta, record) {
+                    if (!record.isLeaf()) return '';
+                    var active = record.get('active');
+                    var on = record.get('on');
+                    if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
+                    if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Офлайн</span>';
+                    if (active === 0) return '<span style="color:gray;">◯ Неактивен</span>';
+                    return '—';
+                }
+            }, {
+                text: 'Обновление',
+                dataIndex: 'created_time',
+                width: 140,
+                renderer: function(v, meta, record) {
+                    if (!record.isLeaf()) return '';
+                    if (v && typeof v === 'number') {
+                        return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
                     }
-                }, {
-                    text: 'Статус',
-                    dataIndex: 'active',
-                    width: 100,
-                    renderer: function(v, meta, record) {
-                        if (!record.isLeaf()) return '';
-                        var active = record.get('active');
-                        var on = record.get('on');
-                        if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
-                        if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Офлайн</span>';
-                        if (active === 0) return '<span style="color:gray;">◯ Неактивен</span>';
-                        return '—';
+                    var createdDate = record.get('created_date');
+                    if (createdDate && typeof createdDate === 'number') {
+                        return Ext.Date.format(new Date(createdDate * 1000), 'd.m.Y H:i:s');
                     }
-                }, {
-                    text: 'Обновление',
-                    dataIndex: 'last_connection',
-                    width: 140,
-                    renderer: function(v) {
-                        if (!v) return '—';
-                        var ts = (typeof v === 'number') ? v : parseInt(v);
-                        if (isNaN(ts)) return v;
-                        if (ts > 10000000000) ts = ts / 1000;
-                        return Ext.Date.format(new Date(ts * 1000), 'd.m.Y H:i:s');
-                    }
-                }, {
-                    text: 'Тип оборудования',
-                    dataIndex: 'configuration',
-                    width: 100,
-                    renderer: function(v) { return v || '—'; }
-                }, {
-                    text: 'IMEI',
-                    dataIndex: 'uniqid',
-                    width: 150,
-                    renderer: function(v) { return v || '—'; }
-                }],
-                style: 'border: 1px solid #ccc;'
-            });
-            // Добавляем дерево в контейнер левой панели
-            var container = navTab.down('#treeContainer');
-            if (container) {
-                container.add(me.tree);
-                navTab.updateLayout();
-            }
-        }
-
-        var root = me.treeStore.getRootNode();
-        root.removeAll();
-        me.buildTreeNodes(root, treeData, statusData);
-        root.expandChildren(true, false);
-        if (me.tree.getView()) me.tree.getView().refresh();
-        if (me.tree.setHeight) me.tree.setHeight(navTab.getHeight() - 50);
-    },
-
-    // Рекурсивное построение узлов
-    buildTreeNodes: function(parentNode, children, statusData) {
-        if (!Ext.isArray(children)) children = [children];
-        var me = this;
-        Ext.each(children, function(item) {
-            var isVehicle = item.vehid && item.active !== undefined;
-            var nodeConfig = {
-                name: item.name || item.text || item.id || '—',
-                leaf: isVehicle || !item.children || item.children.length === 0,
-                expanded: false,
-                id: item.id,
-                vehid: item.vehid,
-                active: item.active,
-                on: item.on,
-                configuration: item.configuration,
-                uniqid: item.uniqid
-            };
-            // Если есть статусные данные для этого ТС
-            if (statusData && statusData[item.vehid]) {
-                nodeConfig.last_connection = statusData[item.vehid].last_connection ||
-                                               statusData[item.vehid].last_data;
-            }
-            var node = parentNode.appendChild(nodeConfig);
-            if (item.children && item.children.length) {
-                me.buildTreeNodes(node, item.children, statusData);
-            }
+                    return '—';
+                }
+            }, {
+                text: 'Тип оборудования',
+                dataIndex: 'configuration',
+                width: 100,
+                renderer: function(v) { return v || '—'; }
+            }, {
+                text: 'IMEI',
+                dataIndex: 'uniqid',
+                width: 150,
+                renderer: function(v) { return v || '—'; }
+            }],
+            style: 'border: 1px solid #ccc;'
         });
+        return me.tree;
     },
 
-    // Поиск по названию объекта
     applySearchFilter: function(query) {
-        var root = this.treeStore ? this.treeStore.getRootNode() : null;
+        var root = this.treeStore.getRootNode();
         if (!root) return;
         root.cascadeBy(function(node) { node.set('visible', true); });
         if (!query || query.length < 2) return;
@@ -224,7 +175,6 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Инициализация карты в правой верхней панели
     initMap: function() {
         var container = document.getElementById('dup-online-map');
         if (!container) return;
