@@ -4,23 +4,23 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // ---- 1. Левая панель (вкладка) ----
+        // Левая панель (вкладка)
         var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
-            width: 700,
-            layout: 'border',  // используем border для надёжности
+            width: 900,
+            layout: 'border',
             items: [{
                 region: 'north',
                 height: 40,
-                items: [me.buildToolbar()]
+                items: [me.buildToolbar()]   // только поиск
             }, {
                 region: 'center',
                 items: [me.buildTree()]
             }]
         });
 
-        // ---- 2. Правая панель (карта + пусто) ----
+        // Правая панель (карта + пусто)
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
@@ -36,78 +36,68 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
-        // ---- 3. Связь и добавление ----
         navTab.map_frame = mainPanel;
         skeleton.navigation.add(navTab);
-        // Активируем вкладку принудительно
-        if (skeleton.navigation.setActiveTab) {
-            skeleton.navigation.setActiveTab(navTab);
-        } else if (skeleton.navigation.layout.setActiveItem) {
-            skeleton.navigation.layout.setActiveItem(navTab);
-        }
+        if (skeleton.navigation.setActiveTab) skeleton.navigation.setActiveTab(navTab);
         if (skeleton.mapframe) skeleton.mapframe.add(mainPanel);
 
-        // ---- 4. Принудительное обновление макетов и загрузка данных ----
         setTimeout(function() {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
-            // Загружаем дерево
             me.treeStore.load({
                 callback: function() {
-                    // Разворачиваем корневой узел
                     var root = me.treeStore.getRootNode();
                     if (root) {
                         root.expandChildren(true, false);
-                        // Принудительно обновляем представление дерева
                         me.tree.getView().refresh();
-                        // Устанавливаем видимую высоту (на случай, если высота нулевая)
                         me.tree.setHeight(navTab.getHeight() - 50);
                     }
                 }
             });
         }, 100);
 
-        // Карта
         setTimeout(function() { me.initMap(); }, 200);
     },
 
+    // Тулбар только с поиском (кнопки фильтрации убраны)
     buildToolbar: function() {
         var me = this;
         return Ext.create('Ext.toolbar.Toolbar', {
-            items: [{
-                text: 'Все', enableToggle: true, toggleGroup: 'statefilter', pressed: true,
-                handler: function() { me.filterByState('all'); }
-            }, {
-                text: 'Активные', enableToggle: true, toggleGroup: 'statefilter',
-                handler: function() { me.filterByState(1); }
-            }, {
-                text: 'Аварии', enableToggle: true, toggleGroup: 'statefilter',
-                handler: function() { me.filterByState(2); }
-            }, {
-                text: 'Стоянка', enableToggle: true, toggleGroup: 'statefilter',
-                handler: function() { me.filterByState(3); }
-            }, {
-                text: 'Холостой ход', enableToggle: true, toggleGroup: 'statefilter',
-                handler: function() { me.filterByState(4); }
-            }, '->', {
-                xtype: 'textfield', emptyText: 'Поиск...', enableKeyEvents: true,
-                listeners: { keyup: function(f) { me.applySearchFilter(f.getValue()); } }
+            items: ['->', {
+                xtype: 'textfield',
+                emptyText: 'Поиск...',
+                enableKeyEvents: true,
+                width: 200,
+                listeners: {
+                    keyup: function(field) {
+                        me.applySearchFilter(field.getValue());
+                    }
+                }
             }]
         });
     },
 
     buildTree: function() {
         var me = this;
+        // Пробуем разные параметры, чтобы получить ТС
         me.treeStore = Ext.create('Ext.data.TreeStore', {
             root: { expanded: true, children: [] },
             proxy: {
                 type: 'ajax',
                 url: '/ax/tree.php',
-                extraParams: { vehs: 1, state: 1 },
+                extraParams: {
+                    vehs: 1,
+                    state: 1,
+                    objects: 1,      // возможно, включает объекты
+                    vehicles: 1,     // возможно, включает ТС
+                    full: 1,         // полные данные
+                    units: 1
+                },
                 reader: { type: 'json', rootProperty: '' }
             }
         });
+
         me.tree = Ext.create('Ext.tree.Panel', {
             store: me.treeStore,
             rootVisible: false,
@@ -115,18 +105,50 @@ Ext.define('Store.duplicate_online.Module', {
                 xtype: 'treecolumn',
                 text: 'Объекты',
                 dataIndex: 'text',
-                flex: 1
+                flex: 2,
+                renderer: function(v, meta, record) {
+                    return v || record.get('name') || record.get('id') || '—';
+                }
+            }, {
+                text: 'Статус',
+                dataIndex: 'state',
+                width: 100,
+                renderer: function(v, meta, record) {
+                    if (!record.isLeaf()) return '';
+                    switch(v) {
+                        case 1: return '<span style="color:green;">● Активен</span>';
+                        case 2: return '<span style="color:red;">⚠ Авария</span>';
+                        case 3: return '<span style="color:orange;">⏸ Стоянка</span>';
+                        case 4: return '<span style="color:gray;">⏳ Холостой ход</span>';
+                        default: return '—';
+                    }
+                }
+            }, {
+                text: 'Обновление',
+                dataIndex: 'last_update',
+                width: 140,
+                renderer: function(v) {
+                    if (!v) return '—';
+                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+                    return v;
+                }
+            }, {
+                text: 'Тип оборудования',
+                dataIndex: 'equip_type',
+                width: 120,
+                renderer: function(v) { return v || '—'; }
+            }, {
+                text: 'IMEI',
+                dataIndex: 'imei',
+                width: 140,
+                renderer: function(v) {
+                    // Поле может называться imei, sim, device_id
+                    return v || '—';
+                }
             }],
-            // Временно добавим рамку, чтобы убедиться, что дерево присутствует
-            style: 'border: 2px solid red;'
+            style: 'border: 1px solid #ccc;'  // убираем красную рамку, оставляем аккуратную
         });
         return me.tree;
-    },
-
-    filterByState: function(state) {
-        var proxy = this.treeStore.getProxy();
-        proxy.setExtraParam('state', state === 'all' ? 1 : state);
-        this.treeStore.load();
     },
 
     applySearchFilter: function(query) {
@@ -138,7 +160,7 @@ Ext.define('Store.duplicate_online.Module', {
         root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
         root.cascadeBy(function(node) {
             if (node !== root) {
-                var text = (node.get('text') || '').toLowerCase();
+                var text = (node.get('text') || node.get('name') || '').toLowerCase();
                 if (text.indexOf(lower) !== -1) {
                     node.set('visible', true);
                     var p = node.parentNode;
