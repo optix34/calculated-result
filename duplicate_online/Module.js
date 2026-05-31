@@ -4,28 +4,33 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // 1. Левая панель (вкладка) – используется стандартный Ext.panel.Panel
+        // ---- Левая панель (дубликат Онлайн) ----
         var navTab = Ext.create('Ext.panel.Panel', {
-            title: 'Дубликат Онлайн',
+            title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
             width: 750,
             layout: 'vbox',
             border: true,
             items: [
-                me.buildToolbar(),   // тулбар с кнопками и поиском
-                me.buildTree()       // дерево с колонками
+                me.buildToolbar(),       // точная копия тулбара Онлайн
+                me.buildTree()           // дерево объектов с колонками
             ]
         });
 
-        // 2. Правая панель – разделена по горизонтали на две пустые области
+        // ---- Правая панель: верхняя часть - карта, нижняя - пусто ----
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             border: false,
             items: [{
                 xtype: 'panel',
                 flex: 1,
-                bodyPadding: 10,
-                html: '<div style="text-align:center; color:#aaa;">Верхняя панель (пусто)</div>'
+                layout: 'fit',
+                // здесь будет карта
+                items: [{
+                    xtype: 'component',
+                    itemId: 'mapPlaceholder',
+                    html: '<div id="duplicate-online-map" style="width:100%;height:100%;"></div>'
+                }]
             }, {
                 xtype: 'panel',
                 flex: 1,
@@ -34,53 +39,58 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
-        // 3. Связываем левую вкладку с правой панелью (обязательно)
+        // Создаём карту после рендера правой панели
+        mainPanel.on('afterrender', function() {
+            me.initMap();
+        }, me, { single: true });
+
+        // Связываем левую вкладку с правой панелью
         navTab.map_frame = mainPanel;
 
-        // 4. Добавляем в интерфейс PILOT
+        // Добавляем в интерфейс PILOT
         skeleton.navigation.add(navTab);
         var mapframe = skeleton.mapframe || skeleton.map_frame;
         if (mapframe) mapframe.add(mainPanel);
     },
 
-    // Тулбар с кнопками фильтрации по состоянию и полем поиска
+    // Создание тулбара (полное копирование вкладки Онлайн)
     buildToolbar: function() {
         var me = this;
         var toolbar = Ext.create('Ext.toolbar.Toolbar', {
             items: [{
-                text: 'Все',
+                text: l('Все'),
                 stateValue: 'all',
                 enableToggle: true,
                 toggleGroup: 'statefilter',
                 pressed: true,
                 handler: function(btn) { me.filterByState(btn, 'all'); }
             }, {
-                text: 'Активные',
+                text: l('Активные'),
                 stateValue: 1,
                 enableToggle: true,
                 toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 1); }
             }, {
-                text: 'Аварии',
+                text: l('Аварии'),
                 stateValue: 2,
                 enableToggle: true,
                 toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 2); }
             }, {
-                text: 'Стоянка',
+                text: l('Стоянка'),
                 stateValue: 3,
                 enableToggle: true,
                 toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 3); }
             }, {
-                text: 'Холостой ход',
+                text: l('Холостой ход'),
                 stateValue: 4,
                 enableToggle: true,
                 toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 4); }
             }, '->', {
                 xtype: 'textfield',
-                emptyText: 'Поиск...',
+                emptyText: l('Поиск...'),
                 enableKeyEvents: true,
                 listeners: {
                     keyup: function(field) {
@@ -93,17 +103,19 @@ Ext.define('Store.duplicate_online.Module', {
         return toolbar;
     },
 
-    // Дерево с колонками
+    // Дерево объектов (как в Онлайн)
     buildTree: function() {
         var me = this;
 
-        // Хранилище дерева (TreeStore) с прокси на /ax/tree.php
         me.treeStore = Ext.create('Ext.data.TreeStore', {
             root: { expanded: true, children: [] },
             proxy: {
                 type: 'ajax',
                 url: '/ax/tree.php',
-                extraParams: { vehs: 1, state: 1 },
+                extraParams: {
+                    vehs: 1,
+                    state: 1
+                },
                 reader: { type: 'json', rootProperty: '' }
             }
         });
@@ -116,28 +128,28 @@ Ext.define('Store.duplicate_online.Module', {
             lines: true,
             columns: [{
                 xtype: 'treecolumn',
-                text: 'Объекты',
+                text: l('Объекты'),
                 dataIndex: 'text',
                 flex: 2,
                 renderer: function(v, m, rec) {
                     return v || rec.get('name') || rec.get('id') || '—';
                 }
             }, {
-                text: 'Статус',
+                text: l('Статус'),
                 dataIndex: 'state',
                 width: 110,
                 renderer: function(v, m, rec) {
                     if (!rec.isLeaf()) return '';
                     switch(v) {
-                        case 1: return '<span style="color:green;">● Активен</span>';
-                        case 2: return '<span style="color:red;">⚠ Авария</span>';
-                        case 3: return '<span style="color:orange;">⏸ Стоянка</span>';
-                        case 4: return '<span style="color:gray;">⏳ Холостой ход</span>';
-                        default: return '—';
+                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> ' + l('Активен');
+                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> ' + l('Авария');
+                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> ' + l('Стоянка');
+                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> ' + l('Холостой ход');
+                        default: return l('Неизвестно');
                     }
                 }
             }, {
-                text: 'Обновлено',
+                text: l('Обновлено'),
                 dataIndex: 'last_update',
                 width: 140,
                 renderer: function(v) {
@@ -146,26 +158,53 @@ Ext.define('Store.duplicate_online.Module', {
                     return v;
                 }
             }, {
-                text: 'Тип оборудования',
+                text: l('Тип оборудования'),
                 dataIndex: 'equip_type',
                 width: 120,
                 renderer: function(v) { return v || '—'; }
             }, {
-                text: 'Скорость',
+                text: l('Скорость'),
                 dataIndex: 'speed',
                 width: 90,
                 renderer: function(v, m, rec) {
                     if (!rec.isLeaf() || v === undefined) return '—';
-                    return v + ' км/ч';
+                    return v + ' ' + (window.uom ? window.uom.speed : 'км/ч');
                 }
             }],
-            viewConfig: { stripeRows: true, loadMask: true, emptyText: 'Загрузка данных...' }
+            viewConfig: { stripeRows: true, loadMask: true, emptyText: l('Загрузка данных...') }
         });
 
         return me.tree;
     },
 
-    // Фильтрация по состоянию (перезагрузка дерева с новым параметром state)
+    // Инициализация карты в верхней панели
+    initMap: function() {
+        // Проверяем, что контейнер существует
+        var container = document.getElementById('duplicate-online-map');
+        if (!container) {
+            console.error('Контейнер для карты не найден');
+            return;
+        }
+        // Создаём карту через глобальный MapContainer (если доступен)
+        if (typeof MapContainer !== 'undefined') {
+            this.map = new MapContainer('duplicate_online_map');
+            // Инициализация: центр, зум, id контейнера, скрыть управление?
+            this.map.init(55.75, 37.65, 10, 'duplicate-online-map', false);
+        } else {
+            console.warn('MapContainer не определён, используем fallback Leaflet');
+            // Fallback: если Leaflet загружен
+            if (window.L) {
+                this.map = L.map('duplicate-online-map').setView([55.75, 37.65], 10);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap'
+                }).addTo(this.map);
+            } else {
+                container.innerHTML = '<div style="padding:20px;text-align:center;">Карта не доступна</div>';
+            }
+        }
+    },
+
+    // Фильтрация по состоянию (перезагрузка дерева)
     filterByState: function(btn, stateValue) {
         var me = this;
         var proxy = me.treeStore.getProxy();
@@ -177,16 +216,20 @@ Ext.define('Store.duplicate_online.Module', {
         me.treeStore.load();
     },
 
-    // Клиентский поиск по названию
+    // Клиентский поиск по тексту
     applySearchFilter: function(query) {
         var root = this.treeStore.getRootNode();
         if (!root) return;
 
+        // Сбрасываем видимость
         root.cascadeBy(function(node) { node.set('visible', true); });
+
         if (!query || query.length < 2) return;
 
         var lower = query.toLowerCase();
+        // Скрываем все
         root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
+        // Показываем совпадающие и их предков
         root.cascadeBy(function(node) {
             if (node !== root) {
                 var text = (node.get('text') || node.get('name') || '').toLowerCase();
