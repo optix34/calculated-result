@@ -4,7 +4,7 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Левая панель (вкладка)
+        // Левая панель (вкладка) с гридом
         var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
@@ -16,7 +16,7 @@ Ext.define('Store.duplicate_online.Module', {
                 items: [me.buildToolbar()]
             }, {
                 region: 'center',
-                items: [me.buildTree()]
+                items: [me.buildGrid()]
             }]
         });
 
@@ -49,7 +49,7 @@ Ext.define('Store.duplicate_online.Module', {
 
         setTimeout(function() { me.initMap(); }, 200);
 
-        // АВТООБНОВЛЕНИЕ: перезагружаем дерево каждые 15 секунд
+        // Автообновление каждые 15 секунд
         me.startAutoRefresh();
     },
 
@@ -57,16 +57,8 @@ Ext.define('Store.duplicate_online.Module', {
         var me = this;
         if (me.refreshInterval) clearInterval(me.refreshInterval);
         me.refreshInterval = setInterval(function() {
-            if (me.treeStore) {
-                me.treeStore.load({
-                    callback: function() {
-                        var root = me.treeStore.getRootNode();
-                        if (root) {
-                            root.expandChildren(true, false);
-                            if (me.tree.view) me.tree.view.refresh();
-                        }
-                    }
-                });
+            if (me.gridStore) {
+                me.loadCurrentData();
             }
         }, 15000);
     },
@@ -88,39 +80,28 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    buildTree: function() {
+    buildGrid: function() {
         var me = this;
-        me.treeStore = Ext.create('Ext.data.TreeStore', {
-            root: { expanded: true, children: [] },
-            proxy: {
-                type: 'ajax',
-                url: '/backend/ax/tree.php',
-                extraParams: {
-                    vehs: 1, state: 1, objects: 1, vehicles: 1, full: 1,
-                    units: 1, devs: 1, last_update: 1, last_data: 1,
-                    with_status: 1, extended: 1
-                },
-                reader: { type: 'json', rootProperty: '' }
-            }
+        me.gridStore = Ext.create('Ext.data.Store', {
+            fields: [
+                'vehid', 'name', 'active', 'on', 'last_connection', 'last_data',
+                'configuration', 'uniqid', 'typename', 'info', 'model', 'year'
+            ],
+            data: []
         });
 
-        me.tree = Ext.create('Ext.tree.Panel', {
-            store: me.treeStore,
-            rootVisible: false,
+        me.grid = Ext.create('Ext.grid.Panel', {
+            store: me.gridStore,
             columns: [{
-                xtype: 'treecolumn',
                 text: 'Объекты',
                 dataIndex: 'name',
                 flex: 2,
-                renderer: function(v, meta, record) {
-                    return v || record.get('text') || record.get('id') || '—';
-                }
+                renderer: function(v) { return v || '—'; }
             }, {
                 text: 'Статус',
-                dataIndex: 'status_display',
+                dataIndex: 'active',
                 width: 100,
                 renderer: function(v, meta, record) {
-                    if (!record.isLeaf()) return '';
                     var active = record.get('active');
                     var on = record.get('on');
                     if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
@@ -130,12 +111,10 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'last_display',
+                dataIndex: 'last_connection',
                 width: 140,
                 renderer: function(v, meta, record) {
-                    if (!record.isLeaf()) return '';
-                    // Пытаемся получить last_update или last_data
-                    var last = record.get('last_update') || record.get('last_data') || record.get('created_time');
+                    var last = v || record.get('last_data');
                     if (!last) return '—';
                     var ts = (typeof last === 'number') ? last : parseInt(last);
                     if (isNaN(ts)) return last;
@@ -153,27 +132,67 @@ Ext.define('Store.duplicate_online.Module', {
                 width: 150,
                 renderer: function(v) { return v || '—'; }
             }],
-            style: 'border: 1px solid #ccc;'
+            viewConfig: { stripeRows: true, loadMask: true, emptyText: 'Загрузка данных...' }
         });
-        return me.tree;
+
+        // Загружаем данные
+        me.loadCurrentData();
+        return me.grid;
+    },
+
+    loadCurrentData: function() {
+        var me = this;
+        var currentTimestamp = Math.floor(Date.now() / 1000);
+
+        Ext.Ajax.request({
+            url: '/backend/ax/current_data.php',
+            method: 'POST',
+            params: {
+                vehs: 1,
+                state: 1,
+                page: 1,
+                start: 0,
+                limit: 500,           // загружаем все объекты (без пагинации)
+                unixTimestamp: currentTimestamp,
+                user_id: 0,
+                c: 6,                 // эти параметры можно подстроить, если нужно
+                n: ''
+            },
+            success: function(response) {
+                var data = Ext.decode(response.responseText);
+                console.log('Данные current_data.php:', data);
+                if (data && data.data && Ext.isArray(data.data)) {
+                    me.gridStore.loadData(data.data);
+                } else if (Ext.isArray(data)) {
+                    me.gridStore.loadData(data);
+                } else {
+                    me.gridStore.loadData([]);
+                    me.grid.view.emptyText = 'Нет данных';
+                }
+                // Применяем поиск, если есть
+                if (me.searchField && me.searchField.getValue()) {
+                    me.applySearchFilter(me.searchField.getValue());
+                }
+            },
+            failure: function() {
+                me.gridStore.loadData([]);
+                me.grid.view.emptyText = 'Ошибка загрузки данных';
+                console.error('Ошибка запроса current_data.php');
+            }
+        });
     },
 
     applySearchFilter: function(query) {
-        var root = this.treeStore ? this.treeStore.getRootNode() : null;
-        if (!root) return;
-        root.cascadeBy(function(node) { node.set('visible', true); });
-        if (!query || query.length < 2) return;
-        var lower = query.toLowerCase();
-        root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
-        root.cascadeBy(function(node) {
-            if (node !== root) {
-                var text = (node.get('name') || node.get('text') || '').toLowerCase();
-                if (text.indexOf(lower) !== -1) {
-                    node.set('visible', true);
-                    var p = node.parentNode;
-                    while (p && p !== root) { p.set('visible', true); p = p.parentNode; }
-                }
-            }
+        var me = this;
+        if (!me.gridStore) return;
+        if (!query || query.length < 2) {
+            me.gridStore.clearFilter();
+            return;
+        }
+        var lowerQuery = query.toLowerCase();
+        me.gridStore.filterBy(function(record) {
+            var name = record.get('name') || '';
+            return name.toLowerCase().indexOf(lowerQuery) !== -1;
         });
     },
 
