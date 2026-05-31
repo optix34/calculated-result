@@ -7,13 +7,10 @@ Ext.define('Store.duplicate_online.Module', {
         var navTab = Ext.create('Ext.panel.Panel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
-            width: 900,
+            width: 700,
             layout: 'vbox',
             border: false,
-            items: [
-                me.buildFilterToolbar(),
-                me.buildGridPanel()
-            ]
+            items: [me.buildFilterToolbar(), me.buildTreePanel()]
         });
 
         var mainPanel = Ext.create('Ext.panel.Panel', {
@@ -65,153 +62,93 @@ Ext.define('Store.duplicate_online.Module', {
         return toolbar;
     },
 
-    buildGridPanel: function() {
+    buildTreePanel: function() {
         var me = this;
-        me.gridStore = Ext.create('Ext.data.Store', { fields: [], data: [] });
-        me.grid = Ext.create('Ext.grid.Panel', {
-            flex: 1, store: me.gridStore, columns: [],
-            viewConfig: { stripeRows: true, loadMask: true },
-            emptyText: l('Загрузка данных...')
+        me.treeStore = Ext.create('Ext.data.TreeStore', { root: { expanded: true, children: [] } });
+        me.tree = Ext.create('Ext.tree.Panel', {
+            flex: 1, store: me.treeStore, rootVisible: false, useArrows: true, lines: true,
+            columns: [{
+                xtype: 'treecolumn', text: l('Объекты'), dataIndex: 'text', flex: 2,
+                renderer: function(v, m, rec) { return v || rec.get('name') || rec.get('id'); }
+            }, {
+                text: l('Статус'), dataIndex: 'state', width: 110,
+                renderer: function(v) { return v ? (v===1?'Активен':'Другой') : '—'; }
+            }, {
+                text: l('Обновлено'), dataIndex: 'last_update', width: 140,
+                renderer: function(v) { return v ? (typeof v==='number'?Ext.Date.format(new Date(v*1000),'d.m.Y H:i:s'):v) : '—'; }
+            }, {
+                text: l('Тип'), dataIndex: 'equip_type', width: 100,
+                renderer: function(v) { return v || '—'; }
+            }, {
+                text: l('Скорость'), dataIndex: 'speed', width: 90,
+                renderer: function(v) { return v !== undefined ? v + ' км/ч' : '—'; }
+            }],
+            viewConfig: { stripeRows: true, loadMask: true }
         });
-        me.loadObjects('all');
-        return me.grid;
+        me.loadTreeData('all');
+        return me.tree;
     },
 
-    loadObjects: function(stateValue) {
+    loadTreeData: function(stateValue) {
         var me = this;
         var stateParam = (stateValue === 'all') ? 1 : stateValue;
+        // ИСПРАВЛЕНИЕ: добавлены возможные параметры, которые могут включить ТС
+        var params = {
+            vehs: 1,
+            state: stateParam,
+            objects: 1,    // возможно, включает объекты
+            units: 1,      // возможно, включает юниты
+            vehicles: 1    // возможно, включает ТС
+        };
         Ext.Ajax.request({
             url: '/ax/tree.php',
-            params: { vehs: 1, state: stateParam },
+            params: params,
             success: function(response) {
-                var data;
-                try { data = Ext.decode(response.responseText); } catch(e) { Ext.Msg.alert('Ошибка', 'Неверный JSON'); return; }
-                console.log('Полный ответ сервера:', data);
-
-                // Выведем глубокую структуру первого узла (если есть)
-                if (data && data.length > 0) {
-                    console.log('ПОЛНАЯ СТРУКТУРА ПЕРВОГО УЗЛА (JSON):', JSON.stringify(data[0], null, 2));
+                var data = Ext.decode(response.responseText);
+                console.log('Ответ сервера (с расширенными параметрами):', data);
+                if (!data || (Ext.isArray(data) && data.length === 0)) {
+                    Ext.Msg.alert('Внимание', 'Нет данных. Убедитесь, что в параметрах запроса переданы правильные поля (objects, vehicles, units).');
                 }
-
-                var objects = me.extractAllObjects(data);
-                console.log('Извлечено объектов:', objects.length, objects);
-
-                if (objects.length === 0) {
-                    me.gridStore.removeAll();
-                    me.grid.view.emptyText = l('Объекты не найдены. Проверьте консоль.');
-                    return;
-                }
-                me.buildColumnsFromData(objects[0]);
-                me.gridStore.loadData(objects);
-                me.originalData = objects;
+                var root = me.treeStore.getRootNode();
+                root.removeAll();
+                me.addNodesToTree(root, data);
+                root.expandChildren(true, false);
                 me.applySearchFilter(me.searchField.getValue());
             },
-            failure: function(response) { Ext.Msg.alert('Ошибка', 'HTTP ' + response.status); }
+            failure: function() { Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные'); }
         });
     },
 
-    extractAllObjects: function(nodes, result) {
-        if (!result) result = [];
-        if (!nodes) return result;
-        if (!Ext.isArray(nodes)) nodes = [nodes];
-
+    addNodesToTree: function(parentNode, children) {
+        if (!Ext.isArray(children)) children = [children];
         var me = this;
-        Ext.each(nodes, function(node) {
-            if (!node || typeof node !== 'object') return;
-            console.log('Обрабатывается узел:', node.name || node.text || node.id, 'ключи:', Object.keys(node));
-
-            // Ищем любой массив внутри узла (кроме null)
-            var childArray = null;
-            for (var key in node) {
-                if (node.hasOwnProperty(key) && Ext.isArray(node[key]) && node[key].length > 0) {
-                    childArray = node[key];
-                    console.log('Найден массив по ключу "' + key + '" с длиной', node[key].length);
-                    break;
-                }
-            }
-
-            // Если есть массив детей – рекурсивно обрабатываем его
-            if (childArray) {
-                me.extractAllObjects(childArray, result);
-            } else {
-                // Нет детей – считаем узел объектом (транспортным средством)
-                // Но только если у него есть id или характерные поля
-                if (node.id || node.lat !== undefined || node.lon !== undefined || node.speed !== undefined || node.state !== undefined) {
-                    var obj = {};
-                    for (var prop in node) {
-                        if (node.hasOwnProperty(prop) && !Ext.isArray(node[prop]) && typeof node[prop] !== 'object') {
-                            obj[prop] = node[prop];
-                        }
-                    }
-                    if (!obj.text && !obj.name) obj.text = node.name || node.text || ('ID ' + node.id);
-                    result.push(obj);
-                } else {
-                    // Если нет id и характерных полей, возможно, это группа без детей – игнорируем
-                    console.log('Узел пропущен (нет id и нет детей):', node.name || node.text);
-                }
-            }
+        Ext.each(children, function(item) {
+            var nodeText = item.text || item.name || (item.id ? 'ID ' + item.id : '?');
+            var isLeaf = !item.children || item.children.length === 0;
+            var nodeConfig = {
+                text: nodeText, leaf: isLeaf, expanded: false,
+                id: item.id, state: item.state, last_update: item.last_update,
+                equip_type: item.equip_type, speed: item.speed
+            };
+            var node = parentNode.appendChild(nodeConfig);
+            if (item.children && item.children.length) me.addNodesToTree(node, item.children);
         });
-        return result;
     },
 
-    buildColumnsFromData: function(sample) {
-        var me = this;
-        var columns = [];
-        var order = ['id', 'text', 'name', 'state', 'last_update', 'updated', 'equip_type', 'type', 'speed', 'course', 'lat', 'lon', 'address'];
-        var fields = Object.keys(sample);
-        fields.sort(function(a,b) {
-            var ia = order.indexOf(a), ib = order.indexOf(b);
-            if (ia === -1) ia = 999; if (ib === -1) ib = 999;
-            return ia - ib;
-        });
-
-        Ext.each(fields, function(field) {
-            var column = { text: l(field), dataIndex: field, flex: (field === 'text' || field === 'name') ? 2 : 1, sortable: true };
-            if (field === 'state') {
-                column.renderer = function(v) {
-                    switch(v) {
-                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> Активен';
-                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> Авария';
-                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> Стоянка';
-                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> Холостой ход';
-                        default: return v || '—';
-                    }
-                };
-                column.width = 110;
-            } else if (field === 'last_update' || field === 'updated') {
-                column.renderer = function(v) { return v ? (typeof v === 'number' ? Ext.Date.format(new Date(v*1000), 'd.m.Y H:i:s') : v) : '—'; };
-                column.width = 140;
-            } else if (field === 'speed') {
-                column.renderer = function(v) { return v !== undefined ? v + ' ' + (window.uom ? window.uom.speed : 'км/ч') : '—'; };
-                column.width = 90;
-            } else if (field === 'lat' || field === 'lon') {
-                column.renderer = function(v) { return v ? v.toFixed(6) : '—'; };
-                column.width = 100;
-            }
-            columns.push(column);
-        });
-        columns.push({
-            xtype: 'actioncolumn', width: 30,
-            items: [{ iconCls: 'fa fa-info-circle', tooltip: 'Информация',
-                handler: function(grid, rowIndex) { var rec = grid.getStore().getAt(rowIndex); Ext.Msg.alert('Объект', rec.get('text') || rec.get('name') || rec.get('id')); }
-            }]
-        });
-
-        me.grid.reconfigure(me.gridStore, columns);
-        var storeFields = fields.map(function(f) { return { name: f }; });
-        me.gridStore.setFields(storeFields);
-    },
-
-    filterByState: function(btn, stateValue) { this.loadObjects(stateValue); },
+    filterByState: function(btn, stateValue) { this.loadTreeData(stateValue); },
     applySearchFilter: function(query) {
-        var me = this;
-        if (!me.originalData) return;
-        if (!query || query.length < 2) { me.gridStore.loadData(me.originalData); return; }
-        var lowerQuery = query.toLowerCase();
-        var filtered = me.originalData.filter(function(record) {
-            var name = record.text || record.name || '';
-            return name.toLowerCase().indexOf(lowerQuery) !== -1;
+        var me = this, root = me.treeStore.getRootNode();
+        if (!root) return;
+        root.cascadeBy(function(n) { n.set('visible', true); });
+        if (!query || query.length < 2) return;
+        var lower = query.toLowerCase();
+        root.cascadeBy(function(n) { if (n !== root) n.set('visible', false); });
+        root.cascadeBy(function(n) {
+            if (n !== root && (n.get('text')||'').toLowerCase().indexOf(lower) !== -1) {
+                n.set('visible', true);
+                var p = n.parentNode;
+                while (p && p !== root) { p.set('visible', true); p = p.parentNode; }
+            }
         });
-        me.gridStore.loadData(filtered);
     }
 });
