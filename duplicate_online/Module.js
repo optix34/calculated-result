@@ -4,17 +4,16 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
+        // Левая панель (дерево)
         var navTab = Ext.create('Ext.panel.Panel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
-            width: 700,
+            width: 800,
             layout: 'vbox',
-            items: [
-                me.buildToolbar(),
-                me.buildTree()
-            ]
+            items: [me.buildToolbar(), me.buildTree()]
         });
 
+        // Правая панель (пустая, разделённая)
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
@@ -31,7 +30,7 @@ Ext.define('Store.duplicate_online.Module', {
         var mapframe = skeleton.mapframe || skeleton.map_frame;
         if (mapframe) mapframe.add(mainPanel);
 
-        me.loadData();
+        me.loadData(); // загружаем данные при старте
     },
 
     buildToolbar: function() {
@@ -40,6 +39,9 @@ Ext.define('Store.duplicate_online.Module', {
             items: [{
                 text: 'Обновить',
                 handler: function() { me.loadData(); }
+            }, {
+                text: 'Показать консоль',
+                handler: function() { console.log('Данные в дереве:', me.store.getRootNode().childNodes); }
             }]
         });
     },
@@ -53,11 +55,20 @@ Ext.define('Store.duplicate_online.Module', {
             flex: 1,
             store: me.store,
             rootVisible: false,
+            useArrows: true,
             columns: [{
                 xtype: 'treecolumn',
-                text: 'Папки и объекты',
+                text: 'Объекты',
                 dataIndex: 'text',
-                flex: 1
+                flex: 2
+            }, {
+                text: 'Статус',
+                dataIndex: 'state',
+                width: 100
+            }, {
+                text: 'Скорость',
+                dataIndex: 'speed',
+                width: 80
             }]
         });
         return me.tree;
@@ -65,27 +76,63 @@ Ext.define('Store.duplicate_online.Module', {
 
     loadData: function() {
         var me = this;
+        // Пробуем разные комбинации параметров
+        var testParams = [
+            { vehs: 1, state: 1, objects: 1, units: 1 },
+            { vehs: 1, state: 1, vehicles: 1, items: 1 },
+            { cmd: 'getTree', withObjects: 1, withGroups: 1 },
+            { vehs: 1, state: 1, full: 1 }
+        ];
+
+        // Для теста используем первый набор – наиболее вероятный
+        var params = testParams[0];
+        console.log('Отправляем запрос с параметрами:', params);
+
         Ext.Ajax.request({
             url: '/ax/tree.php',
-            params: { vehs: 1, state: 1 },  // ⚠️ временные параметры
-            success: function(resp) {
-                var data = Ext.decode(resp.responseText);
+            params: params,
+            success: function(response) {
+                var data;
+                try { data = Ext.decode(response.responseText); } catch(e) {
+                    console.error('Ошибка парсинга JSON', response.responseText);
+                    return;
+                }
+                console.log('ПОЛНЫЙ ОТВЕТ СЕРВЕРА:', JSON.parse(JSON.stringify(data))); // глубокое копирование
+
                 var root = me.store.getRootNode();
                 root.removeAll();
-                me.addNodes(root, data);
-                root.expandChildren(true, false);
-            }
+                if (data && data.length > 0) {
+                    me.addNodes(root, data);
+                    root.expandChildren(true, false);
+                } else if (data && data.data) {
+                    me.addNodes(root, data.data);
+                } else {
+                    Ext.Msg.alert('Внимание', 'Данные не получены. Проверьте консоль для отладки.');
+                }
+            },
+            failure: function() { Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные'); }
         });
     },
 
     addNodes: function(parent, nodes) {
         if (!Ext.isArray(nodes)) nodes = [nodes];
+        var me = this;
         Ext.each(nodes, function(node) {
-            var child = parent.appendChild({
-                text: node.name || node.text || node.id,
-                leaf: !node.children || node.children.length === 0
+            // Определяем название
+            var nodeText = node.text || node.name || node.title || (node.id ? 'ID ' + node.id : '?');
+            var isLeaf = !node.children || node.children.length === 0;
+            var newNode = parent.appendChild({
+                text: nodeText,
+                leaf: isLeaf,
+                state: node.state,
+                speed: node.speed,
+                last_update: node.last_update,
+                equip_type: node.equip_type,
+                id: node.id
             });
-            if (node.children && node.children.length) this.addNodes(child, node.children);
-        }, this);
+            if (node.children && node.children.length) {
+                me.addNodes(newNode, node.children);
+            }
+        });
     }
 });
