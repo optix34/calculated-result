@@ -4,17 +4,16 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Левая панель (фирменный стиль)
+        // Левая панель
         var navTab = Ext.create('Ext.panel.Panel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
-            width: 700,
+            width: 900,
             layout: 'vbox',
             border: false,
-            cls: 'pilot-leftbar-panel', // для стилизации
             items: [
                 me.buildFilterToolbar(),
-                me.buildTreePanel()
+                me.buildGridPanel()   // используем грид вместо дерева для надёжности
             ]
         });
 
@@ -35,14 +34,12 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
-        // Связь и добавление в интерфейс
         navTab.map_frame = mainPanel;
         skeleton.navigation.add(navTab);
         var mapframe = skeleton.mapframe || skeleton.map_frame;
         if (mapframe) mapframe.add(mainPanel);
     },
 
-    // Панель кнопок фильтрации и поиска
     buildFilterToolbar: function() {
         var me = this;
         var toolbar = Ext.create('Ext.toolbar.Toolbar', {
@@ -92,157 +89,201 @@ Ext.define('Store.duplicate_online.Module', {
         return toolbar;
     },
 
-    // Создание панели дерева (с ручным построением данных)
-    buildTreePanel: function() {
+    // Грид для отображения объектов (плоский список)
+    buildGridPanel: function() {
         var me = this;
-        me.treeStore = Ext.create('Ext.data.TreeStore', {
-            root: { expanded: true, children: [] }
+        me.gridStore = Ext.create('Ext.data.Store', {
+            fields: [], // будут определены динамически
+            data: []
         });
-        me.tree = Ext.create('Ext.tree.Panel', {
+
+        me.grid = Ext.create('Ext.grid.Panel', {
             flex: 1,
-            store: me.treeStore,
-            rootVisible: false,
-            useArrows: true,
-            lines: true,
-            border: true,
-            columns: [{
-                xtype: 'treecolumn',
-                text: l('Объекты'),
-                dataIndex: 'text',
-                flex: 2
-            }, {
-                text: l('Статус'),
-                dataIndex: 'state',
-                width: 110,
-                renderer: function(value, meta, record) {
-                    if (!record.isLeaf()) return '';
-                    switch(value) {
-                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> ' + l('Активен');
-                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> ' + l('Авария');
-                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> ' + l('Стоянка');
-                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> ' + l('Холостой ход');
-                        default: return l('Неизвестно');
-                    }
-                }
-            }, {
-                text: l('Обновлено'),
-                dataIndex: 'last_update',
-                width: 140,
-                renderer: function(value) {
-                    if (!value) return '—';
-                    if (typeof value === 'number') return Ext.Date.format(new Date(value * 1000), 'd.m.Y H:i:s');
-                    return value;
-                }
-            }, {
-                text: l('Тип оборудования'),
-                dataIndex: 'equip_type',
-                width: 120,
-                renderer: function(v) { return v || '—'; }
-            }, {
-                text: l('Скорость'),
-                dataIndex: 'speed',
-                width: 90,
-                renderer: function(v, m, r) {
-                    if (!r.isLeaf() || v === undefined) return '—';
-                    return v + ' ' + (window.uom ? window.uom.speed : 'км/ч');
-                }
-            }],
-            viewConfig: { stripeRows: true, loadMask: true }
+            store: me.gridStore,
+            columns: [],
+            viewConfig: { stripeRows: true, loadMask: true },
+            emptyText: l('Загрузка данных...')
         });
-        me.loadTreeData('all');
-        return me.tree;
+
+        me.loadObjects('all');
+        return me.grid;
     },
 
-    // Загрузка данных с сервера и построение дерева
-    loadTreeData: function(stateValue) {
+    // Загрузка объектов с сервера
+    loadObjects: function(stateValue) {
         var me = this;
         var stateParam = (stateValue === 'all') ? 1 : stateValue;
+
         Ext.Ajax.request({
             url: '/ax/tree.php',
             params: { vehs: 1, state: stateParam },
             success: function(response) {
-                var data = Ext.decode(response.responseText);
-                var root = me.treeStore.getRootNode();
-                root.removeAll();
-                // Преобразуем полученный массив в узлы дерева
-                me.addNodesToTree(root, data);
-                // Раскрываем корневые узлы
-                root.expandChildren(true, false);
-                // Применяем поиск, если есть текст
+                var data;
+                try {
+                    data = Ext.decode(response.responseText);
+                } catch(e) {
+                    Ext.Msg.alert(l('Ошибка'), l('Неверный JSON от сервера'));
+                    console.error('JSON error', response.responseText);
+                    return;
+                }
+
+                console.log('Ответ сервера (полный):', data);
+                // Извлекаем все объекты (транспортные средства) из иерархии
+                var objects = me.extractAllObjects(data);
+                console.log('Извлечено объектов:', objects.length, objects);
+
+                if (objects.length === 0) {
+                    me.gridStore.removeAll();
+                    me.grid.view.emptyText = l('Нет объектов для отображения');
+                    return;
+                }
+
+                // Динамически строим колонки на основе полей первого объекта
+                me.buildColumnsFromData(objects[0]);
+                me.gridStore.loadData(objects);
+                me.originalData = objects;
                 me.applySearchFilter(me.searchField.getValue());
             },
-            failure: function() {
-                Ext.Msg.alert(l('Ошибка'), l('Не удалось загрузить список объектов'));
+            failure: function(response) {
+                Ext.Msg.alert(l('Ошибка'), l('HTTP ') + response.status + ': ' + response.statusText);
+                console.error('Request failed', response);
             }
         });
     },
 
-    // Рекурсивное добавление узлов из ответа сервера
-    addNodesToTree: function(parentNode, children) {
-        var me = this;
-        Ext.each(children, function(item) {
-            // Создаем узел
-            var nodeConfig = {
-                text: item.text || item.name,
-                leaf: !item.children || item.children.length === 0,
-                expanded: false,
-                // Копируем все поля из ответа, чтобы они были доступны в колонках
-                id: item.id,
-                state: item.state,
-                last_update: item.last_update,
-                equip_type: item.equip_type,
-                speed: item.speed,
-                course: item.course,
-                lat: item.lat,
-                lon: item.lon,
-                address: item.address
-            };
-            var node = parentNode.appendChild(nodeConfig);
-            if (item.children && item.children.length) {
-                me.addNodesToTree(node, item.children);
+    // Рекурсивный сбор всех листовых узлов (транспортных средств) из дерева
+    extractAllObjects: function(nodes, result) {
+        if (!result) result = [];
+        if (!nodes) return result;
+
+        var processNode = function(node) {
+            // Если узел является транспортным средством (нет детей или есть признак leaf)
+            var isVehicle = (!node.children || node.children.length === 0) || node.leaf === true;
+            if (isVehicle && node.id && node.id > 0) {
+                // Копируем все поля
+                var obj = {};
+                for (var key in node) {
+                    if (node.hasOwnProperty(key) && key !== 'children') {
+                        obj[key] = node[key];
+                    }
+                }
+                // Убедимся, что есть текстовое поле
+                if (!obj.text) obj.text = obj.name || obj.title || ('ID ' + obj.id);
+                result.push(obj);
             }
+            if (node.children && node.children.length) {
+                Ext.each(node.children, function(child) {
+                    processNode(child);
+                });
+            }
+        };
+
+        if (Ext.isArray(nodes)) {
+            Ext.each(nodes, processNode);
+        } else {
+            processNode(nodes);
+        }
+        return result;
+    },
+
+    // Динамическое создание колонок на основе полей объекта
+    buildColumnsFromData: function(sample) {
+        var me = this;
+        var columns = [];
+        // Желаемый порядок колонок
+        var order = ['id', 'text', 'state', 'last_update', 'equip_type', 'speed', 'course', 'lat', 'lon', 'address', 'plate', 'model'];
+
+        var fields = [];
+        for (var key in sample) {
+            if (sample.hasOwnProperty(key) && key !== 'children' && key !== 'leaf') {
+                fields.push(key);
+            }
+        }
+        // Сортируем по order
+        fields.sort(function(a,b) {
+            var ia = order.indexOf(a);
+            var ib = order.indexOf(b);
+            if (ia === -1) ia = 999;
+            if (ib === -1) ib = 999;
+            return ia - ib;
         });
+
+        Ext.each(fields, function(field) {
+            var column = {
+                text: l(field),
+                dataIndex: field,
+                flex: (field === 'text') ? 2 : 1,
+                sortable: true
+            };
+            // Рендереры для типовых полей
+            if (field === 'state') {
+                column.renderer = function(v) {
+                    switch(v) {
+                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> ' + l('Активен');
+                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> ' + l('Авария');
+                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> ' + l('Стоянка');
+                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> ' + l('Холостой ход');
+                        default: return v || '—';
+                    }
+                };
+                column.width = 110;
+            } else if (field === 'last_update' || field === 'updated') {
+                column.renderer = function(v) {
+                    if (!v) return '—';
+                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+                    return v;
+                };
+                column.width = 140;
+            } else if (field === 'speed') {
+                column.renderer = function(v) {
+                    if (v === undefined) return '—';
+                    return v + ' ' + (window.uom ? window.uom.speed : 'км/ч');
+                };
+                column.width = 90;
+            } else if (field === 'lat' || field === 'lon') {
+                column.renderer = function(v) { return v ? v.toFixed(6) : '—'; };
+                column.width = 100;
+            }
+            columns.push(column);
+        });
+
+        // Добавляем колонку действий
+        columns.push({
+            xtype: 'actioncolumn',
+            width: 30,
+            items: [{
+                iconCls: 'fa fa-info-circle',
+                tooltip: l('Информация'),
+                handler: function(grid, rowIndex) {
+                    var rec = grid.getStore().getAt(rowIndex);
+                    Ext.Msg.alert(l('Объект'), rec.get('text') + '\nID: ' + rec.get('id'));
+                }
+            }]
+        });
+
+        me.grid.reconfigure(me.gridStore, columns);
+        var storeFields = fields.map(function(f) { return { name: f }; });
+        me.gridStore.setFields(storeFields);
     },
 
     // Фильтрация по состоянию
     filterByState: function(btn, stateValue) {
-        var me = this;
-        // Перезагружаем данные с новым параметром state
-        me.loadTreeData(stateValue);
-        // Визуальное выделение кнопки уже есть благодаря toggleGroup
+        this.loadObjects(stateValue);
     },
 
-    // Поиск по тексту (фильтрация узлов дерева)
+    // Поиск по тексту (клиентский)
     applySearchFilter: function(query) {
         var me = this;
-        var root = me.treeStore.getRootNode();
-        if (!root) return;
-
-        // Сначала показываем все узлы
-        root.cascadeBy(function(node) {
-            node.set('visible', true);
-        });
-
-        if (!query || query.length < 2) return;
-
+        if (!me.originalData) return;
+        if (!query || query.length < 2) {
+            me.gridStore.loadData(me.originalData);
+            return;
+        }
         var lowerQuery = query.toLowerCase();
-        // Скрываем все узлы
-        root.cascadeBy(function(node) {
-            if (node !== root) node.set('visible', false);
+        var filtered = me.originalData.filter(function(record) {
+            var name = record.text || record.name || '';
+            return name.toLowerCase().indexOf(lowerQuery) !== -1;
         });
-        // Показываем узлы, соответствующие поиску, и их предков
-        root.cascadeBy(function(node) {
-            if (node !== root) {
-                var text = node.get('text') || '';
-                if (text.toLowerCase().indexOf(lowerQuery) !== -1) {
-                    node.set('visible', true);
-                    var parent = node.parentNode;
-                    while (parent && parent !== root) {
-                        parent.set('visible', true);
-                        parent = parent.parentNode;
-                    }
-                }
-            }
-        });
+        me.gridStore.loadData(filtered);
     }
 });
