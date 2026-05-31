@@ -102,8 +102,25 @@ Ext.define('Store.duplicate_online.Module', {
                     if (successful && records.length > 0) {
                         var firstVehicle = me.findFirstVehicle(records);
                         if (firstVehicle) {
-                            console.log('Поля первого ТС:', Object.keys(firstVehicle.data));
-                            console.log('Данные первого ТС:', firstVehicle.data);
+                            console.log('=== ДИАГНОСТИКА: поля и значения первого ТС ===');
+                            var data = firstVehicle.data;
+                            var possibleTimeFields = ['last_update', 'last_data', 'last_online', 'last_pos_time', 'updated', 'timestamp', 'server_time', 'last_time', 'time', 'date'];
+                            for (var key in data) {
+                                if (data.hasOwnProperty(key)) {
+                                    var val = data[key];
+                                    // Если значение похоже на timestamp (число от 10^9 до 2^31) или строка с датой
+                                    var isTime = false;
+                                    if (typeof val === 'number' && (val > 1000000000 && val < 9999999999)) isTime = true;
+                                    if (typeof val === 'string' && val.match(/^\d{4}-\d{2}-\d{2}/)) isTime = true;
+                                    if (possibleTimeFields.indexOf(key) !== -1) isTime = true;
+                                    if (isTime || key.indexOf('time') !== -1 || key.indexOf('date') !== -1) {
+                                        console.log('  ' + key + ' : ' + val + ' (возможно, время)');
+                                    } else {
+                                        console.log('  ' + key + ' : ' + val);
+                                    }
+                                }
+                            }
+                            console.log('=================================================');
                         }
                     }
                 }
@@ -140,14 +157,28 @@ Ext.define('Store.duplicate_online.Module', {
                 width: 140,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
-                    if (v) {
-                        if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
-                        return v;
-                    }
-                    var lastData = record.get('last_data');
-                    if (lastData) {
-                        if (typeof lastData === 'number') return Ext.Date.format(new Date(lastData * 1000), 'd.m.Y H:i:s');
-                        return lastData;
+                    // Функция для поиска времени в record
+                    var getTime = function(rec) {
+                        var possibleFields = ['last_update', 'last_data', 'last_online', 'last_pos_time', 'updated', 'timestamp', 'server_time', 'last_time', 'time'];
+                        for (var i = 0; i < possibleFields.length; i++) {
+                            var val = rec.get(possibleFields[i]);
+                            if (val) {
+                                if (typeof val === 'number') return val;
+                                if (typeof val === 'string') {
+                                    var parsed = Date.parse(val);
+                                    if (!isNaN(parsed)) return parsed / 1000;
+                                }
+                            }
+                        }
+                        return null;
+                    };
+                    var timeValue = getTime(record);
+                    if (timeValue) {
+                        if (typeof timeValue === 'number') {
+                            if (timeValue > 10000000000) timeValue = timeValue / 1000; // если миллисекунды
+                            return Ext.Date.format(new Date(timeValue * 1000), 'd.m.Y H:i:s');
+                        }
+                        return timeValue;
                     }
                     return '—';
                 }
