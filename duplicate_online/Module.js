@@ -43,16 +43,7 @@ Ext.define('Store.duplicate_online.Module', {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
-            me.treeStore.load({
-                callback: function() {
-                    var root = me.treeStore.getRootNode();
-                    if (root) {
-                        root.expandChildren(true, false);
-                        me.tree.getView().refresh();
-                        me.tree.setHeight(navTab.getHeight() - 50);
-                    }
-                }
-            });
+            me.loadTreeData();
         }, 100);
 
         setTimeout(function() { me.initMap(); }, 200);
@@ -71,6 +62,10 @@ Ext.define('Store.duplicate_online.Module', {
                         me.applySearchFilter(field.getValue());
                     }
                 }
+            }, {
+                xtype: 'button',
+                text: 'Обновить',
+                handler: function() { me.loadTreeData(); }
             }]
         });
     },
@@ -121,12 +116,14 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'created_time',
+                dataIndex: 'last_update',  // пытаемся использовать last_update
                 width: 140,
-                renderer: function(v) {
-                    if (!v) return '—';
-                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
-                    return v;
+                renderer: function(v, meta, record) {
+                    // Если last_update отсутствует, используем created_time или другие поля
+                    var updateTime = v || record.get('created_time') || record.get('msg_time');
+                    if (!updateTime) return '—';
+                    if (typeof updateTime === 'number') return Ext.Date.format(new Date(updateTime * 1000), 'd.m.Y H:i:s');
+                    return updateTime;
                 }
             }, {
                 text: 'Тип оборудования',
@@ -145,7 +142,44 @@ Ext.define('Store.duplicate_online.Module', {
             }],
             style: 'border: 1px solid #ccc;'
         });
+
+        // Логируем первое полученное транспортное средство, чтобы увидеть доступные поля
+        me.treeStore.on('load', function(store, records) {
+            var firstVehicle = me.findFirstVehicleNode(records);
+            if (firstVehicle) {
+                console.log('Пример полей объекта:', firstVehicle.getData());
+            }
+        });
+
         return me.tree;
+    },
+
+    // Поиск первого узла-транспортного средства
+    findFirstVehicleNode: function(nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.isLeaf()) return node;
+            if (node.childNodes && node.childNodes.length) {
+                var found = this.findFirstVehicleNode(node.childNodes);
+                if (found) return found;
+            }
+        }
+        return null;
+    },
+
+    loadTreeData: function() {
+        var me = this;
+        if (me.treeStore) {
+            me.treeStore.load({
+                callback: function() {
+                    var root = me.treeStore.getRootNode();
+                    if (root) {
+                        root.expandChildren(true, false);
+                        me.tree.getView().refresh();
+                    }
+                }
+            });
+        }
     },
 
     applySearchFilter: function(query) {
