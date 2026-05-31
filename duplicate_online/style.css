@@ -1,0 +1,8 @@
+/* Дополнительные стили для вкладки дубликата */
+.x-toolbar .x-btn-default-toolbar-small {
+    background: #f0f0f0;
+    border-color: #ccc;
+}
+.x-toolbar .x-btn-default-toolbar-small:hover {
+    background: #e0e0e0;
+}
