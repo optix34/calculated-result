@@ -3,26 +3,20 @@ Ext.define('Store.duplicate_online.Module', {
 
     initModule: function() {
         let me = this;
-        console.log('[duplicate_online] initModule started'); // Лог для проверки
+        console.log('[duplicate_online] initModule started');
 
-        // ---- 1. ЛЕВАЯ ПАНЕЛЬ (ВКЛАДКА В НАВИГАЦИИ) ----
-        // Используем стандартную Ext.panel.Panel вместо Pilot.utils.LeftBarPanel для надежности.
+        // Левая панель
         let navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
             width: 750,
             layout: 'vbox',
-            border: true,
-            items: [
-                me.buildToolbar(),   // тулбар с кнопками и поиском
-                me.buildTree()       // дерево объектов
-            ]
+            items: [me.buildToolbar(), me.buildTree()]
         });
 
-        // ---- 2. ПРАВАЯ ПАНЕЛЬ ----
+        // Правая панель
         let mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
-            border: false,
             items: [{
                 xtype: 'panel',
                 flex: 1,
@@ -31,84 +25,62 @@ Ext.define('Store.duplicate_online.Module', {
             }, {
                 xtype: 'panel',
                 flex: 1,
-                bodyPadding: 10,
-                html: '<div style="text-align:center; color:#aaa;">Нижняя панель (пусто)</div>'
+                html: '<div style="text-align:center; padding:20px;">Нижняя панель (пусто)</div>'
             }]
         });
 
-        // ---- 3. ИНИЦИАЛИЗАЦИЯ КАРТЫ ПОСЛЕ РЕНДЕРА ----
         mainPanel.on('afterrender', function() {
             me.initMap();
         }, me, { single: true });
 
-        // ---- 4. СВЯЗЫВАНИЕ ЛЕВОЙ И ПРАВОЙ ПАНЕЛИ ----
         navTab.map_frame = mainPanel;
 
-        // ---- 5. ДОБАВЛЕНИЕ В ИНТЕРФЕЙС PILOT ----
-        if (skeleton && skeleton.navigation) {
-            skeleton.navigation.add(navTab);
-            console.log('[duplicate_online] Панель добавлена в navigation');
-        } else {
-            console.error('[duplicate_online] skeleton.navigation not found');
-            return;
-        }
-        
-        // Используем mapframe или map_frame в зависимости от того, что доступно
+        // Добавляем вкладку в левую навигацию
+        skeleton.navigation.add(navTab);
+        console.log('[duplicate_online] Панель добавлена в navigation');
+
+        // ПРИНУДИТЕЛЬНО АКТИВИРУЕМ ВКЛАДКУ
+        skeleton.navigation.setActiveTab(navTab);
+
         let mapframe = skeleton.mapframe || skeleton.map_frame;
-        if (mapframe && mapframe.add) {
+        if (mapframe) {
             mapframe.add(mainPanel);
             console.log('[duplicate_online] Панель добавлена в mapframe');
-        } else {
-            console.error('[duplicate_online] skeleton.mapframe / map_frame not found');
         }
+
+        // Принудительно загружаем данные дерева и раскрываем корень
+        me.treeStore.on('load', function() {
+            console.log('[duplicate_online] Дерево загружено, узлов:', me.treeStore.getRootNode().childNodes.length);
+            me.treeStore.getRootNode().expandChildren(true, false);
+        });
+        me.treeStore.load();
     },
 
-    // ---- ТУЛБАР С ФИЛЬТРАМИ И ПОИСКОМ ----
     buildToolbar: function() {
         let me = this;
-        let toolbar = Ext.create('Ext.toolbar.Toolbar', {
+        return Ext.create('Ext.toolbar.Toolbar', {
             items: [{
-                text: 'Все',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
-                pressed: true,
+                text: 'Все', enableToggle: true, toggleGroup: 'statefilter', pressed: true,
                 handler: function() { me.filterByState('all'); }
             }, {
-                text: 'Активные',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
+                text: 'Активные', enableToggle: true, toggleGroup: 'statefilter',
                 handler: function() { me.filterByState(1); }
             }, {
-                text: 'Аварии',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
+                text: 'Аварии', enableToggle: true, toggleGroup: 'statefilter',
                 handler: function() { me.filterByState(2); }
             }, {
-                text: 'Стоянка',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
+                text: 'Стоянка', enableToggle: true, toggleGroup: 'statefilter',
                 handler: function() { me.filterByState(3); }
             }, {
-                text: 'Холостой ход',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
+                text: 'Холостой ход', enableToggle: true, toggleGroup: 'statefilter',
                 handler: function() { me.filterByState(4); }
             }, '->', {
-                xtype: 'textfield',
-                emptyText: 'Поиск...',
-                enableKeyEvents: true,
-                listeners: {
-                    keyup: function(field) {
-                        me.applySearchFilter(field.getValue());
-                    }
-                }
+                xtype: 'textfield', emptyText: 'Поиск...', enableKeyEvents: true,
+                listeners: { keyup: function(f) { me.applySearchFilter(f.getValue()); } }
             }]
         });
-        me.searchField = toolbar.items.last();
-        return toolbar;
     },
 
-    // ---- ДЕРЕВО ОБЪЕКТОВ ----
     buildTree: function() {
         let me = this;
         me.treeStore = Ext.create('Ext.data.TreeStore', {
@@ -126,21 +98,12 @@ Ext.define('Store.duplicate_online.Module', {
             store: me.treeStore,
             rootVisible: false,
             useArrows: true,
-            lines: true,
             columns: [{
-                xtype: 'treecolumn',
-                text: 'Объекты',
-                dataIndex: 'text',
-                flex: 2,
-                renderer: function(v, meta, record) {
-                    return v || record.get('name') || record.get('id') || '—';
-                }
+                xtype: 'treecolumn', text: 'Объекты', dataIndex: 'text', flex: 1
             }, {
-                text: 'Статус',
-                dataIndex: 'state',
-                width: 110,
-                renderer: function(v, meta, record) {
-                    if (!record.isLeaf()) return '';
+                text: 'Статус', dataIndex: 'state', width: 100,
+                renderer: function(v, m, rec) {
+                    if (!rec.isLeaf()) return '';
                     switch(v) {
                         case 1: return '<span style="color:green;">● Активен</span>';
                         case 2: return '<span style="color:red;">⚠ Авария</span>';
@@ -149,115 +112,48 @@ Ext.define('Store.duplicate_online.Module', {
                         default: return '—';
                     }
                 }
-            }, {
-                text: 'Обновлено',
-                dataIndex: 'last_update',
-                width: 140,
-                renderer: function(v) {
-                    if (!v) return '—';
-                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
-                    return v;
-                }
-            }, {
-                text: 'Тип оборудования',
-                dataIndex: 'equip_type',
-                width: 120,
-                renderer: function(v) { return v || '—'; }
-            }, {
-                text: 'Скорость',
-                dataIndex: 'speed',
-                width: 90,
-                renderer: function(v, meta, record) {
-                    if (!record.isLeaf() || v === undefined) return '—';
-                    return v + ' км/ч';
-                }
-            }],
-            viewConfig: { stripeRows: true, loadMask: true, emptyText: 'Загрузка данных...' }
+            }]
         });
-
         return me.tree;
     },
 
-    // ---- ФИЛЬТРАЦИЯ ПО СОСТОЯНИЮ (ПЕРЕЗАГРУЗКА ДЕРЕВА) ----
-    filterByState: function(stateValue) {
-        let me = this;
-        let proxy = me.treeStore.getProxy();
-        if (stateValue === 'all') {
-            proxy.setExtraParam('state', 1);
-        } else {
-            proxy.setExtraParam('state', stateValue);
-        }
-        me.treeStore.load();
+    filterByState: function(state) {
+        let proxy = this.treeStore.getProxy();
+        proxy.setExtraParam('state', state === 'all' ? 1 : state);
+        this.treeStore.load();
     },
 
-    // ---- КЛИЕНТСКИЙ ПОИСК ПО ТЕКСТУ ----
     applySearchFilter: function(query) {
         let root = this.treeStore.getRootNode();
         if (!root) return;
-
-        root.cascadeBy(function(node) { node.set('visible', true); });
+        root.cascadeBy(node => node.set('visible', true));
         if (!query || query.length < 2) return;
-
         let lower = query.toLowerCase();
-        root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
-        root.cascadeBy(function(node) {
+        root.cascadeBy(node => { if (node !== root) node.set('visible', false); });
+        root.cascadeBy(node => {
             if (node !== root) {
-                let text = (node.get('text') || node.get('name') || '').toLowerCase();
+                let text = (node.get('text') || '').toLowerCase();
                 if (text.indexOf(lower) !== -1) {
                     node.set('visible', true);
-                    let parent = node.parentNode;
-                    while (parent && parent !== root) {
-                        parent.set('visible', true);
-                        parent = parent.parentNode;
-                    }
+                    let p = node.parentNode;
+                    while (p && p !== root) { p.set('visible', true); p = p.parentNode; }
                 }
             }
         });
     },
 
-    // ---- ИНИЦИАЛИЗАЦИЯ КАРТЫ В ВЕРХНЕЙ ПАНЕЛИ ----
     initMap: function() {
         let container = document.getElementById('duplicate-online-map');
-        if (!container) {
-            console.error('[duplicate_online] Контейнер карты не найден');
-            return;
-        }
-
-        // Проверяем, загружена ли карта PILOT
-        if (window.MapContainer && typeof MapContainer === 'function') {
-            try {
-                this.map = new MapContainer('dup_map');
-                this.map.init(55.75, 37.65, 10, 'duplicate-online-map', {
-                    withControls: true,
-                    withOutPlugins: false
-                });
-                console.log('[duplicate_online] Карта создана через MapContainer');
-            } catch(e) {
-                console.error('[duplicate_online] Ошибка при создании MapContainer:', e);
-                this.createFallbackMap(container);
-            }
-        } 
-        // Если MapContainer нет, создаем фоллбэк
-        else {
-            console.warn('[duplicate_online] MapContainer не определен, используется фоллбэк');
-            this.createFallbackMap(container);
-        }
-    },
-
-    // Фоллбэк карты на Leaflet
-    createFallbackMap: function(container) {
-        if (typeof L !== 'undefined') {
+        if (!container) return;
+        if (window.MapContainer) {
+            this.map = new MapContainer('dup_map');
+            this.map.init(55.75, 37.65, 10, 'duplicate-online-map', false);
+            console.log('[duplicate_online] Карта создана');
+        } else if (typeof L !== 'undefined') {
             this.map = L.map('duplicate-online-map').setView([55.75, 37.65], 10);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; CartoDB',
-                subdomains: 'abcd',
-                maxZoom: 19,
-                minZoom: 1
-            }).addTo(this.map);
-            console.log('[duplicate_online] Карта создана через Leaflet');
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(this.map);
         } else {
-            container.innerHTML = '<div style="padding:20px;text-align:center;">⚠️ Карта не доступна (нет MapContainer или Leaflet)</div>';
-            console.error('[duplicate_online] Leaflet также не загружен');
+            container.innerHTML = '<div style="padding:20px;">Карта не доступна</div>';
         }
     }
 });
