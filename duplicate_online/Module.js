@@ -42,11 +42,7 @@ Ext.define('Store.duplicate_online.Module', {
         var me = this;
         var toolbar = Ext.create('Ext.toolbar.Toolbar', {
             items: [{
-                text: l('Все'),
-                stateValue: 'all',
-                enableToggle: true,
-                toggleGroup: 'statefilter',
-                pressed: true,
+                text: l('Все'), stateValue: 'all', enableToggle: true, toggleGroup: 'statefilter', pressed: true,
                 handler: function(btn) { me.filterByState(btn, 'all'); }
             }, {
                 text: l('Активные'), stateValue: 1, enableToggle: true, toggleGroup: 'statefilter',
@@ -61,9 +57,7 @@ Ext.define('Store.duplicate_online.Module', {
                 text: l('Холостой ход'), stateValue: 4, enableToggle: true, toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 4); }
             }, '->', {
-                xtype: 'textfield',
-                emptyText: l('Поиск...'),
-                enableKeyEvents: true,
+                xtype: 'textfield', emptyText: l('Поиск...'), enableKeyEvents: true,
                 listeners: { keyup: function(field) { me.applySearchFilter(field.getValue()); } }
             }]
         });
@@ -73,14 +67,9 @@ Ext.define('Store.duplicate_online.Module', {
 
     buildGridPanel: function() {
         var me = this;
-        me.gridStore = Ext.create('Ext.data.Store', {
-            fields: [],
-            data: []
-        });
+        me.gridStore = Ext.create('Ext.data.Store', { fields: [], data: [] });
         me.grid = Ext.create('Ext.grid.Panel', {
-            flex: 1,
-            store: me.gridStore,
-            columns: [],
+            flex: 1, store: me.gridStore, columns: [],
             viewConfig: { stripeRows: true, loadMask: true },
             emptyText: l('Загрузка данных...')
         });
@@ -96,106 +85,69 @@ Ext.define('Store.duplicate_online.Module', {
             params: { vehs: 1, state: stateParam },
             success: function(response) {
                 var data;
-                try {
-                    data = Ext.decode(response.responseText);
-                } catch(e) {
-                    Ext.Msg.alert(l('Ошибка'), l('Неверный JSON'));
-                    return;
+                try { data = Ext.decode(response.responseText); } catch(e) { Ext.Msg.alert('Ошибка', 'Неверный JSON'); return; }
+                console.log('Полный ответ сервера:', data);
+
+                // Выведем глубокую структуру первого узла (если есть)
+                if (data && data.length > 0) {
+                    console.log('ПОЛНАЯ СТРУКТУРА ПЕРВОГО УЗЛА (JSON):', JSON.stringify(data[0], null, 2));
                 }
-                console.log('Полный ответ сервера:', JSON.parse(JSON.stringify(data))); // глубокое копирование для отладки
 
                 var objects = me.extractAllObjects(data);
                 console.log('Извлечено объектов:', objects.length, objects);
 
                 if (objects.length === 0) {
                     me.gridStore.removeAll();
-                    me.grid.view.emptyText = l('Объекты не найдены. Проверьте структуру данных.');
+                    me.grid.view.emptyText = l('Объекты не найдены. Проверьте консоль.');
                     return;
                 }
-
                 me.buildColumnsFromData(objects[0]);
                 me.gridStore.loadData(objects);
                 me.originalData = objects;
                 me.applySearchFilter(me.searchField.getValue());
             },
-            failure: function(response) {
-                Ext.Msg.alert(l('Ошибка'), l('HTTP ') + response.status);
-            }
+            failure: function(response) { Ext.Msg.alert('Ошибка', 'HTTP ' + response.status); }
         });
     },
 
-    // Улучшенный сбор объектов: рекурсивно обходит все свойства, ищет массивы (children, items, data и т.д.)
     extractAllObjects: function(nodes, result) {
         if (!result) result = [];
         if (!nodes) return result;
-
-        // Если nodes не массив, делаем массив
-        if (!Ext.isArray(nodes)) {
-            nodes = [nodes];
-        }
+        if (!Ext.isArray(nodes)) nodes = [nodes];
 
         var me = this;
         Ext.each(nodes, function(node) {
             if (!node || typeof node !== 'object') return;
+            console.log('Обрабатывается узел:', node.name || node.text || node.id, 'ключи:', Object.keys(node));
 
-            // Логируем каждый узел для отладки
-            console.log('Узел:', node);
-
-            // Определяем, является ли узел транспортным средством
-            var isVehicle = false;
-            // Условия: нет дочерних массивов, или есть признаки ТС
-            var hasChildrenArray = false;
+            // Ищем любой массив внутри узла (кроме null)
             var childArray = null;
-            // Проверяем возможные имена массивов с детьми
-            var possibleChildKeys = ['children', 'items', 'data', 'nodes', 'objects', 'vehicles'];
-            for (var i = 0; i < possibleChildKeys.length; i++) {
-                var key = possibleChildKeys[i];
-                if (node[key] && Ext.isArray(node[key]) && node[key].length > 0) {
-                    hasChildrenArray = true;
+            for (var key in node) {
+                if (node.hasOwnProperty(key) && Ext.isArray(node[key]) && node[key].length > 0) {
                     childArray = node[key];
+                    console.log('Найден массив по ключу "' + key + '" с длиной', node[key].length);
                     break;
                 }
             }
 
-            if (!hasChildrenArray) {
-                // Нет детей – скорее всего, объект
-                isVehicle = true;
-            } else {
-                // Есть дети – но возможно, это группа, а сам узел тоже может быть объектом (редко)
-                // Можно проверить наличие характерных полей
-                if (node.id && (node.lat !== undefined || node.lon !== undefined || node.speed !== undefined || node.state !== undefined)) {
-                    isVehicle = true;
-                    // Всё равно обработаем детей отдельно
-                }
-            }
-
-            // Дополнительно: если есть хотя бы одно из полей, характерных для ТС, считаем объектом
-            if (!isVehicle && (node.lat !== undefined || node.lon !== undefined || node.speed !== undefined || node.state !== undefined || node.course !== undefined)) {
-                isVehicle = true;
-            }
-
-            if (isVehicle && node.id) {
-                // Копируем все поля, кроме вложенных массивов
-                var obj = {};
-                for (var prop in node) {
-                    if (node.hasOwnProperty(prop) && !Ext.isArray(node[prop]) && typeof node[prop] !== 'object') {
-                        obj[prop] = node[prop];
-                    }
-                }
-                // Если нет текстового поля, создаём из id
-                if (!obj.text && !obj.name) obj.text = node.name || node.title || ('ID ' + node.id);
-                result.push(obj);
-            }
-
-            // Рекурсивно обрабатываем всех детей, если есть
+            // Если есть массив детей – рекурсивно обрабатываем его
             if (childArray) {
                 me.extractAllObjects(childArray, result);
             } else {
-                // Если нет явного массива, проверяем все свойства на наличие массивов объектов
-                for (var p in node) {
-                    if (node.hasOwnProperty(p) && Ext.isArray(node[p]) && p !== 'children' && p !== 'items') {
-                        me.extractAllObjects(node[p], result);
+                // Нет детей – считаем узел объектом (транспортным средством)
+                // Но только если у него есть id или характерные поля
+                if (node.id || node.lat !== undefined || node.lon !== undefined || node.speed !== undefined || node.state !== undefined) {
+                    var obj = {};
+                    for (var prop in node) {
+                        if (node.hasOwnProperty(prop) && !Ext.isArray(node[prop]) && typeof node[prop] !== 'object') {
+                            obj[prop] = node[prop];
+                        }
                     }
+                    if (!obj.text && !obj.name) obj.text = node.name || node.text || ('ID ' + node.id);
+                    result.push(obj);
+                } else {
+                    // Если нет id и характерных полей, возможно, это группа без детей – игнорируем
+                    console.log('Узел пропущен (нет id и нет детей):', node.name || node.text);
                 }
             }
         });
@@ -208,37 +160,26 @@ Ext.define('Store.duplicate_online.Module', {
         var order = ['id', 'text', 'name', 'state', 'last_update', 'updated', 'equip_type', 'type', 'speed', 'course', 'lat', 'lon', 'address'];
         var fields = Object.keys(sample);
         fields.sort(function(a,b) {
-            var ia = order.indexOf(a);
-            var ib = order.indexOf(b);
-            if (ia === -1) ia = 999;
-            if (ib === -1) ib = 999;
+            var ia = order.indexOf(a), ib = order.indexOf(b);
+            if (ia === -1) ia = 999; if (ib === -1) ib = 999;
             return ia - ib;
         });
 
         Ext.each(fields, function(field) {
-            var column = {
-                text: l(field),
-                dataIndex: field,
-                flex: (field === 'text' || field === 'name') ? 2 : 1,
-                sortable: true
-            };
+            var column = { text: l(field), dataIndex: field, flex: (field === 'text' || field === 'name') ? 2 : 1, sortable: true };
             if (field === 'state') {
                 column.renderer = function(v) {
                     switch(v) {
-                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> ' + l('Активен');
-                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> ' + l('Авария');
-                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> ' + l('Стоянка');
-                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> ' + l('Холостой ход');
+                        case 1: return '<i class="fa fa-play-circle" style="color:green;"></i> Активен';
+                        case 2: return '<i class="fa fa-exclamation-triangle" style="color:red;"></i> Авария';
+                        case 3: return '<i class="fa fa-pause-circle" style="color:orange;"></i> Стоянка';
+                        case 4: return '<i class="fa fa-hourglass-half" style="color:gray;"></i> Холостой ход';
                         default: return v || '—';
                     }
                 };
                 column.width = 110;
             } else if (field === 'last_update' || field === 'updated') {
-                column.renderer = function(v) {
-                    if (!v) return '—';
-                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
-                    return v;
-                };
+                column.renderer = function(v) { return v ? (typeof v === 'number' ? Ext.Date.format(new Date(v*1000), 'd.m.Y H:i:s') : v) : '—'; };
                 column.width = 140;
             } else if (field === 'speed') {
                 column.renderer = function(v) { return v !== undefined ? v + ' ' + (window.uom ? window.uom.speed : 'км/ч') : '—'; };
@@ -249,17 +190,10 @@ Ext.define('Store.duplicate_online.Module', {
             }
             columns.push(column);
         });
-
         columns.push({
-            xtype: 'actioncolumn',
-            width: 30,
-            items: [{
-                iconCls: 'fa fa-info-circle',
-                tooltip: l('Информация'),
-                handler: function(grid, rowIndex) {
-                    var rec = grid.getStore().getAt(rowIndex);
-                    Ext.Msg.alert(l('Объект'), rec.get('text') || rec.get('name') || rec.get('id'));
-                }
+            xtype: 'actioncolumn', width: 30,
+            items: [{ iconCls: 'fa fa-info-circle', tooltip: 'Информация',
+                handler: function(grid, rowIndex) { var rec = grid.getStore().getAt(rowIndex); Ext.Msg.alert('Объект', rec.get('text') || rec.get('name') || rec.get('id')); }
             }]
         });
 
@@ -268,17 +202,11 @@ Ext.define('Store.duplicate_online.Module', {
         me.gridStore.setFields(storeFields);
     },
 
-    filterByState: function(btn, stateValue) {
-        this.loadObjects(stateValue);
-    },
-
+    filterByState: function(btn, stateValue) { this.loadObjects(stateValue); },
     applySearchFilter: function(query) {
         var me = this;
         if (!me.originalData) return;
-        if (!query || query.length < 2) {
-            me.gridStore.loadData(me.originalData);
-            return;
-        }
+        if (!query || query.length < 2) { me.gridStore.loadData(me.originalData); return; }
         var lowerQuery = query.toLowerCase();
         var filtered = me.originalData.filter(function(record) {
             var name = record.text || record.name || '';
