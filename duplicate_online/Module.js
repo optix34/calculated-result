@@ -2,137 +2,177 @@ Ext.define('Store.duplicate_online.Module', {
     extend: 'Ext.Component',
 
     initModule: function() {
-        var me = this;
+        const me = this;
 
-        // Левая панель (дерево)
-        var navTab = Ext.create('Ext.panel.Panel', {
+        // Левая панель (только интерфейс, без загрузки данных)
+        const navTab = Ext.create('Ext.panel.Panel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
-            width: 800,
+            width: 700,
             layout: 'vbox',
-            items: [me.buildToolbar(), me.buildTree()]
+            items: [
+                me.buildToolbar(),
+                me.buildTreePanel()
+            ]
         });
 
-        // Правая панель (пустая, разделённая)
-        var mainPanel = Ext.create('Ext.panel.Panel', {
+        // Правая панель (разделена по горизонтали)
+        const mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
-                xtype: 'panel', flex: 1,
-                html: '<div style="padding:20px;text-align:center;">Верхняя панель (пусто)</div>'
+                xtype: 'panel', flex: 1, bodyPadding: 10,
+                html: '<div style="text-align:center; color:#aaa;">Верхняя панель (пусто)</div>'
             }, {
-                xtype: 'panel', flex: 1,
-                html: '<div style="padding:20px;text-align:center;">Нижняя панель (пусто)</div>'
+                xtype: 'panel', flex: 1, bodyPadding: 10,
+                html: '<div style="text-align:center; color:#aaa;">Нижняя панель (пусто)</div>'
             }]
         });
 
+        // Интеграция с PILOT
         navTab.map_frame = mainPanel;
         skeleton.navigation.add(navTab);
-        var mapframe = skeleton.mapframe || skeleton.map_frame;
+        const mapframe = skeleton.mapframe || skeleton.map_frame;
         if (mapframe) mapframe.add(mainPanel);
-
-        me.loadData(); // загружаем данные при старте
     },
 
+    // Создание тулбара с кнопками
     buildToolbar: function() {
-        var me = this;
         return Ext.create('Ext.toolbar.Toolbar', {
             items: [{
-                text: 'Обновить',
-                handler: function() { me.loadData(); }
+                text: l('Все'),         enableToggle: true, toggleGroup: 'statefilter', pressed: true,
+                handler: () => this.filterTree('all')
             }, {
-                text: 'Показать консоль',
-                handler: function() { console.log('Данные в дереве:', me.store.getRootNode().childNodes); }
+                text: l('Активные'),    enableToggle: true, toggleGroup: 'statefilter',
+                handler: () => this.filterTree(1)
+            }, {
+                text: l('Аварии'),      enableToggle: true, toggleGroup: 'statefilter',
+                handler: () => this.filterTree(2)
+            }, {
+                text: l('Стоянка'),     enableToggle: true, toggleGroup: 'statefilter',
+                handler: () => this.filterTree(3)
+            }, {
+                text: l('Холостой ход'), enableToggle: true, toggleGroup: 'statefilter',
+                handler: () => this.filterTree(4)
+            }, '->', {
+                xtype: 'textfield',
+                emptyText: l('Поиск...'),
+                enableKeyEvents: true,
+                listeners: { keyup: (field) => this.searchTree(field.getValue()) }
             }]
         });
     },
 
-    buildTree: function() {
-        var me = this;
-        me.store = Ext.create('Ext.data.TreeStore', {
+    // Создание панели дерева
+    buildTreePanel: function() {
+        this.treeStore = Ext.create('Ext.data.TreeStore', {
             root: { expanded: true, children: [] }
         });
-        me.tree = Ext.create('Ext.tree.Panel', {
+
+        this.tree = Ext.create('Ext.tree.Panel', {
             flex: 1,
-            store: me.store,
+            store: this.treeStore,
             rootVisible: false,
             useArrows: true,
             columns: [{
                 xtype: 'treecolumn',
-                text: 'Объекты',
+                text: l('Объекты'),
                 dataIndex: 'text',
                 flex: 2
             }, {
-                text: 'Статус',
+                text: l('Статус'),
                 dataIndex: 'state',
-                width: 100
+                width: 100,
+                renderer: (v) => this.renderState(v)
             }, {
-                text: 'Скорость',
+                text: l('Скорость'),
                 dataIndex: 'speed',
                 width: 80
             }]
         });
-        return me.tree;
+
+        // Загружаем данные ПОСЛЕ создания дерева
+        this.loadData();
+        return this.tree;
     },
 
-    loadData: function() {
-        var me = this;
-        // Пробуем разные комбинации параметров
-        var testParams = [
-            { vehs: 1, state: 1, objects: 1, units: 1 },
-            { vehs: 1, state: 1, vehicles: 1, items: 1 },
-            { cmd: 'getTree', withObjects: 1, withGroups: 1 },
-            { vehs: 1, state: 1, full: 1 }
-        ];
-
-        // Для теста используем первый набор – наиболее вероятный
-        var params = testParams[0];
-        console.log('Отправляем запрос с параметрами:', params);
-
+    // Загрузка данных с сервера
+    loadData: function(stateValue = 'all') {
+        const stateParam = (stateValue === 'all') ? 1 : stateValue;
         Ext.Ajax.request({
             url: '/ax/tree.php',
-            params: params,
-            success: function(response) {
-                var data;
-                try { data = Ext.decode(response.responseText); } catch(e) {
-                    console.error('Ошибка парсинга JSON', response.responseText);
-                    return;
-                }
-                console.log('ПОЛНЫЙ ОТВЕТ СЕРВЕРА:', JSON.parse(JSON.stringify(data))); // глубокое копирование
-
-                var root = me.store.getRootNode();
+            params: { vehs: 1, state: stateParam },
+            success: (response) => {
+                const data = Ext.decode(response.responseText);
+                const root = this.treeStore.getRootNode();
                 root.removeAll();
-                if (data && data.length > 0) {
-                    me.addNodes(root, data);
+                if (data && data.length) {
+                    this.addNodes(root, data);
                     root.expandChildren(true, false);
-                } else if (data && data.data) {
-                    me.addNodes(root, data.data);
                 } else {
-                    Ext.Msg.alert('Внимание', 'Данные не получены. Проверьте консоль для отладки.');
+                    Ext.Msg.alert('Внимание', 'Нет данных для отображения.');
                 }
             },
-            failure: function() { Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные'); }
+            failure: () => Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные.')
         });
     },
 
+    // Рекурсивное добавление узлов в дерево
     addNodes: function(parent, nodes) {
         if (!Ext.isArray(nodes)) nodes = [nodes];
-        var me = this;
-        Ext.each(nodes, function(node) {
-            // Определяем название
-            var nodeText = node.text || node.name || node.title || (node.id ? 'ID ' + node.id : '?');
-            var isLeaf = !node.children || node.children.length === 0;
-            var newNode = parent.appendChild({
-                text: nodeText,
+        Ext.each(nodes, (node) => {
+            const isLeaf = !node.children || node.children.length === 0;
+            const newNode = parent.appendChild({
+                text: node.text || node.name || node.id,
                 leaf: isLeaf,
                 state: node.state,
                 speed: node.speed,
-                last_update: node.last_update,
-                equip_type: node.equip_type,
                 id: node.id
             });
             if (node.children && node.children.length) {
-                me.addNodes(newNode, node.children);
+                this.addNodes(newNode, node.children);
             }
         });
+    },
+
+    // Фильтрация дерева по состоянию
+    filterTree: function(stateValue) {
+        this.loadData(stateValue);
+    },
+
+    // Поиск по дереву (фильтрация видимости)
+    searchTree: function(query) {
+        const root = this.treeStore.getRootNode();
+        if (!root) return;
+
+        // Сначала показываем все узлы
+        root.cascadeBy(node => node.set('visible', true));
+
+        if (!query || query.length < 2) return;
+
+        const lowerQuery = query.toLowerCase();
+        // Скрываем все узлы
+        root.cascadeBy(node => { if (node !== root) node.set('visible', false); });
+        // Показываем совпадающие и их предков
+        root.cascadeBy(node => {
+            if (node !== root && (node.get('text') || '').toLowerCase().indexOf(lowerQuery) !== -1) {
+                node.set('visible', true);
+                let parent = node.parentNode;
+                while (parent && parent !== root) {
+                    parent.set('visible', true);
+                    parent = parent.parentNode;
+                }
+            }
+        });
+    },
+
+    // Вспомогательная функция для отображения статуса
+    renderState: function(state) {
+        switch(state) {
+            case 1: return '<span style="color:green;">Активен</span>';
+            case 2: return '<span style="color:red;">Авария</span>';
+            case 3: return '<span style="color:orange;">Стоянка</span>';
+            case 4: return '<span style="color:gray;">Холостой ход</span>';
+            default: return '—';
+        }
     }
 });
