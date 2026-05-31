@@ -16,7 +16,7 @@ Ext.define('Store.duplicate_online.Module', {
                 items: [me.buildToolbar()]
             }, {
                 region: 'center',
-                items: [me.buildTree()]   // дерево создаётся сразу
+                items: [me.buildTree()]
             }]
         });
 
@@ -49,7 +49,12 @@ Ext.define('Store.duplicate_online.Module', {
 
         setTimeout(function() { me.initMap(); }, 200);
 
-        // === АВТООБНОВЛЕНИЕ: перезагружаем дерево каждые 15 секунд ===
+        // АВТООБНОВЛЕНИЕ: перезагружаем дерево каждые 15 секунд
+        me.startAutoRefresh();
+    },
+
+    startAutoRefresh: function() {
+        var me = this;
         if (me.refreshInterval) clearInterval(me.refreshInterval);
         me.refreshInterval = setInterval(function() {
             if (me.treeStore) {
@@ -58,7 +63,7 @@ Ext.define('Store.duplicate_online.Module', {
                         var root = me.treeStore.getRootNode();
                         if (root) {
                             root.expandChildren(true, false);
-                            me.tree.getView().refresh();
+                            if (me.tree.view) me.tree.view.refresh();
                         }
                     }
                 });
@@ -91,17 +96,9 @@ Ext.define('Store.duplicate_online.Module', {
                 type: 'ajax',
                 url: '/backend/ax/tree.php',
                 extraParams: {
-                    vehs: 1,
-                    state: 1,
-                    objects: 1,
-                    vehicles: 1,
-                    full: 1,
-                    units: 1,
-                    devs: 1,
-                    last_update: 1,
-                    last_data: 1,
-                    with_status: 1,
-                    extended: 1
+                    vehs: 1, state: 1, objects: 1, vehicles: 1, full: 1,
+                    units: 1, devs: 1, last_update: 1, last_data: 1,
+                    with_status: 1, extended: 1
                 },
                 reader: { type: 'json', rootProperty: '' }
             }
@@ -120,7 +117,7 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Статус',
-                dataIndex: 'active',
+                dataIndex: 'status_display',
                 width: 100,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
@@ -133,18 +130,17 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'created_time',   // используем created_time (оно точно есть)
+                dataIndex: 'last_display',
                 width: 140,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
-                    if (v && typeof v === 'number') {
-                        return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
-                    }
-                    var createdDate = record.get('created_date');
-                    if (createdDate && typeof createdDate === 'number') {
-                        return Ext.Date.format(new Date(createdDate * 1000), 'd.m.Y H:i:s');
-                    }
-                    return '—';
+                    // Пытаемся получить last_update или last_data
+                    var last = record.get('last_update') || record.get('last_data') || record.get('created_time');
+                    if (!last) return '—';
+                    var ts = (typeof last === 'number') ? last : parseInt(last);
+                    if (isNaN(ts)) return last;
+                    if (ts > 10000000000) ts = ts / 1000;
+                    return Ext.Date.format(new Date(ts * 1000), 'd.m.Y H:i:s');
                 }
             }, {
                 text: 'Тип оборудования',
