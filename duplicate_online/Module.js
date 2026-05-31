@@ -4,25 +4,26 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Левая панель (вкладка)
-        var navTab = Ext.create('Ext.panel.Panel', {
+        // ---- Левая панель (вкладка) в стиле PILOT ----
+        // Используем фирменный компонент для левой панели, чтобы автоматически получить правильный стиль.
+        var navTab = Ext.create('Pilot.utils.LeftBarPanel', {
             title: 'Дубликат Онлайн',
-            iconCls: 'fa fa-copy',
+            iconCls: 'x-fa fa-copy', // Используем стандартный класс иконок Font Awesome
+            iconAlign: 'top',
+            minimized: true,
             width: 950,
-            layout: 'border',
             items: [{
-                region: 'north',
-                height: 40,
-                items: [me.buildToolbar()]
-            }, {
-                region: 'center',
-                items: [me.buildTree()]
+                xtype: 'container',
+                layout: 'vbox',
+                flex: 1,
+                items: [me.buildToolbar(), me.buildTree()]
             }]
         });
 
-        // Правая панель: карта сверху, пустая панель снизу
+        // ---- Правая панель (карта + пусто) ----
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
+            border: false,
             items: [{
                 xtype: 'panel',
                 flex: 1,
@@ -36,11 +37,13 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
+        // ---- Связь и добавление в интерфейс ----
         navTab.map_frame = mainPanel;
         skeleton.navigation.add(navTab);
         if (skeleton.navigation.setActiveTab) skeleton.navigation.setActiveTab(navTab);
         if (skeleton.mapframe) skeleton.mapframe.add(mainPanel);
 
+        // Небольшая задержка для стабильности рендеринга
         setTimeout(function() {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
@@ -57,9 +60,11 @@ Ext.define('Store.duplicate_online.Module', {
             });
         }, 100);
 
+        // Инициализация карты
         setTimeout(function() { me.initMap(); }, 200);
     },
 
+    // ---- Тулбар с поиском ----
     buildToolbar: function() {
         var me = this;
         return Ext.create('Ext.toolbar.Toolbar', {
@@ -77,6 +82,7 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
+    // ---- Дерево объектов с расширенными колонками ----
     buildTree: function() {
         var me = this;
         me.treeStore = Ext.create('Ext.data.TreeStore', {
@@ -92,8 +98,8 @@ Ext.define('Store.duplicate_online.Module', {
                     full: 1,
                     units: 1,
                     devs: 1,
-                    last_update: 1,
-                    last_data: 1,
+                    last_data: 1,    // Явно запрашиваем поле last_data
+                    last_update: 1,  // И last_update
                     with_status: 1,
                     extended: 1
                 },
@@ -127,16 +133,32 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'created_time',
+                dataIndex: 'last_data', // Ищем это поле в первую очередь
                 width: 140,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
-                    if (v && typeof v === 'number') {
-                        return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+
+                    // Список полей для поиска в порядке приоритета
+                    var timeFields = ['last_data', 'last_update', 'last_online', 'last_pos_time', 'updated', 'server_time'];
+                    var timestamp = null;
+
+                    // Ищем первое непустое поле из списка
+                    for (var i = 0; i < timeFields.length; i++) {
+                        var fieldValue = record.get(timeFields[i]);
+                        if (fieldValue) {
+                            timestamp = fieldValue;
+                            break;
+                        }
                     }
-                    var createdDate = record.get('created_date');
-                    if (createdDate && typeof createdDate === 'number') {
-                        return Ext.Date.format(new Date(createdDate * 1000), 'd.m.Y H:i:s');
+
+                    // Если ничего не нашли, используем created_time как запасной вариант
+                    if (!timestamp) {
+                        timestamp = record.get('created_time') || record.get('created_date');
+                    }
+
+                    if (timestamp && typeof timestamp === 'number') {
+                        // Преобразуем Unix timestamp (в секундах) в читаемый формат
+                        return Ext.Date.format(new Date(timestamp * 1000), 'd.m.Y H:i:s');
                     }
                     return '—';
                 }
@@ -150,12 +172,12 @@ Ext.define('Store.duplicate_online.Module', {
                 dataIndex: 'uniqid',
                 width: 150,
                 renderer: function(v) { return v || '—'; }
-            }],
-            style: 'border: 1px solid #ccc;'
+            }]
         });
         return me.tree;
     },
 
+    // ---- Поиск по дереву ----
     applySearchFilter: function(query) {
         var root = this.treeStore.getRootNode();
         if (!root) return;
@@ -175,17 +197,21 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
+    // ---- Инициализация карты ----
     initMap: function() {
         var container = document.getElementById('dup-online-map');
         if (!container) return;
         if (window.MapContainer) {
             this.map = new MapContainer('dup_map');
             this.map.init(55.75, 37.65, 10, 'dup-online-map', false);
+            console.log('[duplicate_online] Карта создана через MapContainer');
         } else if (typeof L !== 'undefined') {
             this.map = L.map('dup-online-map').setView([55.75, 37.65], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(this.map);
+            console.log('[duplicate_online] Карта создана через Leaflet');
         } else {
             container.innerHTML = '<div style="padding:20px;">Карта не доступна</div>';
+            console.error('[duplicate_online] MapContainer и Leaflet не определены');
         }
     }
 });
