@@ -4,16 +4,17 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Левая панель (без зависимости от Pilot.utils.LeftBarPanel)
+        // Левая панель (фирменный стиль)
         var navTab = Ext.create('Ext.panel.Panel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
             width: 700,
             layout: 'vbox',
-            border: true,
+            border: false,
+            cls: 'pilot-leftbar-panel', // для стилизации
             items: [
                 me.buildFilterToolbar(),
-                me.buildOnlineTree()
+                me.buildTreePanel()
             ]
         });
 
@@ -34,13 +35,14 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
+        // Связь и добавление в интерфейс
         navTab.map_frame = mainPanel;
         skeleton.navigation.add(navTab);
         var mapframe = skeleton.mapframe || skeleton.map_frame;
         if (mapframe) mapframe.add(mainPanel);
     },
 
-    // Панель кнопок фильтрации
+    // Панель кнопок фильтрации и поиска
     buildFilterToolbar: function() {
         var me = this;
         var toolbar = Ext.create('Ext.toolbar.Toolbar', {
@@ -90,23 +92,12 @@ Ext.define('Store.duplicate_online.Module', {
         return toolbar;
     },
 
-    // Дерево объектов с колонками
-    buildOnlineTree: function() {
+    // Создание панели дерева (с ручным построением данных)
+    buildTreePanel: function() {
         var me = this;
-
         me.treeStore = Ext.create('Ext.data.TreeStore', {
-            root: { expanded: true, children: [] },
-            proxy: {
-                type: 'ajax',
-                url: '/ax/tree.php',
-                extraParams: { vehs: 1, state: 1 },
-                reader: {
-                    type: 'json',
-                    rootProperty: ''
-                }
-            }
+            root: { expanded: true, children: [] }
         });
-
         me.tree = Ext.create('Ext.tree.Panel', {
             flex: 1,
             store: me.treeStore,
@@ -158,37 +149,76 @@ Ext.define('Store.duplicate_online.Module', {
             }],
             viewConfig: { stripeRows: true, loadMask: true }
         });
-
+        me.loadTreeData('all');
         return me.tree;
     },
 
-    // Фильтрация по состоянию (перезагрузка дерева)
-    filterByState: function(btn, stateValue) {
+    // Загрузка данных с сервера и построение дерева
+    loadTreeData: function(stateValue) {
         var me = this;
-        var store = me.treeStore;
-        if (!store) return;
-
-        if (stateValue === 'all') {
-            store.getProxy().setExtraParam('state', 1);
-        } else {
-            store.getProxy().setExtraParam('state', stateValue);
-        }
-        store.load({
-            callback: function() {
+        var stateParam = (stateValue === 'all') ? 1 : stateValue;
+        Ext.Ajax.request({
+            url: '/ax/tree.php',
+            params: { vehs: 1, state: stateParam },
+            success: function(response) {
+                var data = Ext.decode(response.responseText);
+                var root = me.treeStore.getRootNode();
+                root.removeAll();
+                // Преобразуем полученный массив в узлы дерева
+                me.addNodesToTree(root, data);
+                // Раскрываем корневые узлы
+                root.expandChildren(true, false);
+                // Применяем поиск, если есть текст
                 me.applySearchFilter(me.searchField.getValue());
+            },
+            failure: function() {
+                Ext.Msg.alert(l('Ошибка'), l('Не удалось загрузить список объектов'));
             }
         });
     },
 
-    // Поиск по названию
+    // Рекурсивное добавление узлов из ответа сервера
+    addNodesToTree: function(parentNode, children) {
+        var me = this;
+        Ext.each(children, function(item) {
+            // Создаем узел
+            var nodeConfig = {
+                text: item.text || item.name,
+                leaf: !item.children || item.children.length === 0,
+                expanded: false,
+                // Копируем все поля из ответа, чтобы они были доступны в колонках
+                id: item.id,
+                state: item.state,
+                last_update: item.last_update,
+                equip_type: item.equip_type,
+                speed: item.speed,
+                course: item.course,
+                lat: item.lat,
+                lon: item.lon,
+                address: item.address
+            };
+            var node = parentNode.appendChild(nodeConfig);
+            if (item.children && item.children.length) {
+                me.addNodesToTree(node, item.children);
+            }
+        });
+    },
+
+    // Фильтрация по состоянию
+    filterByState: function(btn, stateValue) {
+        var me = this;
+        // Перезагружаем данные с новым параметром state
+        me.loadTreeData(stateValue);
+        // Визуальное выделение кнопки уже есть благодаря toggleGroup
+    },
+
+    // Поиск по тексту (фильтрация узлов дерева)
     applySearchFilter: function(query) {
         var me = this;
-        var store = me.treeStore;
-        if (!store) return;
-        var root = store.getRootNode();
+        var root = me.treeStore.getRootNode();
         if (!root) return;
 
-        // Сброс
+        // Сначала показываем все узлы
         root.cascadeBy(function(node) {
             node.set('visible', true);
         });
@@ -196,11 +226,11 @@ Ext.define('Store.duplicate_online.Module', {
         if (!query || query.length < 2) return;
 
         var lowerQuery = query.toLowerCase();
-        // Скрыть все
+        // Скрываем все узлы
         root.cascadeBy(function(node) {
             if (node !== root) node.set('visible', false);
         });
-        // Показать совпадающие
+        // Показываем узлы, соответствующие поиску, и их предков
         root.cascadeBy(function(node) {
             if (node !== root) {
                 var text = node.get('text') || '';
