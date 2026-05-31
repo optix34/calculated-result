@@ -43,7 +43,13 @@ Ext.define('Store.duplicate_online.Module', {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
-            me.loadTreeData();
+            me.loadTreeData(); // первая загрузка
+            // Автообновление каждые 30 секунд
+            setInterval(function() {
+                if (me.treeStore && !me.treeStore.isLoading()) {
+                    me.loadTreeData();
+                }
+            }, 30000);
         }, 100);
 
         setTimeout(function() { me.initMap(); }, 200);
@@ -62,44 +68,100 @@ Ext.define('Store.duplicate_online.Module', {
                         me.applySearchFilter(field.getValue());
                     }
                 }
-            }, {
-                xtype: 'button',
-                text: 'Обновить',
-                handler: function() { me.loadTreeData(); }
             }]
+        });
+    },
+
+    loadTreeData: function() {
+        var me = this;
+        Ext.Ajax.request({
+            url: '/backend/ax/tree.php',
+            params: {
+                vehs: 1,
+                state: 1,
+                objects: 1,
+                vehicles: 1,
+                full: 1,
+                units: 1,
+                devs: 1
+            },
+            success: function(response) {
+                var data = Ext.decode(response.responseText);
+                // Диагностика: вывести первое ТС с его полями
+                if (data && data.length > 0) {
+                    var firstVehicle = me.findFirstVehicle(data);
+                    if (firstVehicle) {
+                        console.log('Доступные поля объекта:', Object.keys(firstVehicle));
+                        console.log('Пример объекта:', firstVehicle);
+                    }
+                }
+                var root = me.treeStore.getRootNode();
+                root.removeAll();
+                me.buildTreeFromData(root, data);
+                root.expandChildren(true, false);
+                me.tree.getView().refresh();
+                me.applySearchFilter(me.searchField ? me.searchField.getValue() : '');
+            },
+            failure: function() {
+                Ext.Msg.alert('Ошибка', 'Не удалось загрузить данные');
+            }
+        });
+    },
+
+    findFirstVehicle: function(nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.leaf || !node.children || node.children.length === 0) {
+                if (node.id && typeof node.id === 'number') return node;
+            }
+            if (node.children && node.children.length) {
+                var found = this.findFirstVehicle(node.children);
+                if (found) return found;
+            }
+        }
+        return null;
+    },
+
+    buildTreeFromData: function(parentNode, children) {
+        var me = this;
+        if (!Ext.isArray(children)) children = [children];
+        Ext.each(children, function(child) {
+            var isLeaf = child.leaf || !child.children || child.children.length === 0;
+            // Определяем поле времени: last_update, msgtime, updated, или created_time
+            var updateField = child.last_update || child.msgtime || child.updated || child.created_time;
+            var nodeConfig = {
+                text: child.name || child.text || child.id,
+                name: child.name,
+                leaf: isLeaf,
+                active: child.active,
+                on: child.on,
+                configuration: child.configuration,
+                uniqid: child.uniqid,
+                last_update: updateField,
+                id: child.id
+            };
+            var node = parentNode.appendChild(nodeConfig);
+            if (child.children && child.children.length) {
+                me.buildTreeFromData(node, child.children);
+            }
         });
     },
 
     buildTree: function() {
         var me = this;
         me.treeStore = Ext.create('Ext.data.TreeStore', {
-            root: { expanded: true, children: [] },
-            proxy: {
-                type: 'ajax',
-                url: '/backend/ax/tree.php',
-                extraParams: {
-                    vehs: 1,
-                    state: 1,
-                    objects: 1,
-                    vehicles: 1,
-                    full: 1,
-                    units: 1,
-                    devs: 1
-                },
-                reader: { type: 'json', rootProperty: '' }
-            }
+            root: { expanded: true, children: [] }
         });
-
         me.tree = Ext.create('Ext.tree.Panel', {
             store: me.treeStore,
             rootVisible: false,
             columns: [{
                 xtype: 'treecolumn',
                 text: 'Объекты',
-                dataIndex: 'name',
+                dataIndex: 'text',
                 flex: 2,
                 renderer: function(v, meta, record) {
-                    return v || record.get('text') || record.get('id') || '—';
+                    return v || record.get('name') || record.get('id') || '—';
                 }
             }, {
                 text: 'Статус',
@@ -116,14 +178,13 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'last_update',  // пытаемся использовать last_update
+                dataIndex: 'last_update',
                 width: 140,
-                renderer: function(v, meta, record) {
-                    // Если last_update отсутствует, используем created_time или другие поля
-                    var updateTime = v || record.get('created_time') || record.get('msg_time');
-                    if (!updateTime) return '—';
-                    if (typeof updateTime === 'number') return Ext.Date.format(new Date(updateTime * 1000), 'd.m.Y H:i:s');
-                    return updateTime;
+                renderer: function(v) {
+                    if (!v) return '—';
+                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+                    if (typeof v === 'string') return v;
+                    return '—';
                 }
             }, {
                 text: 'Тип оборудования',
@@ -142,44 +203,8 @@ Ext.define('Store.duplicate_online.Module', {
             }],
             style: 'border: 1px solid #ccc;'
         });
-
-        // Логируем первое полученное транспортное средство, чтобы увидеть доступные поля
-        me.treeStore.on('load', function(store, records) {
-            var firstVehicle = me.findFirstVehicleNode(records);
-            if (firstVehicle) {
-                console.log('Пример полей объекта:', firstVehicle.getData());
-            }
-        });
-
+        me.searchField = Ext.ComponentQuery.query('textfield', me.tree.up())[0];
         return me.tree;
-    },
-
-    // Поиск первого узла-транспортного средства
-    findFirstVehicleNode: function(nodes) {
-        for (var i = 0; i < nodes.length; i++) {
-            var node = nodes[i];
-            if (node.isLeaf()) return node;
-            if (node.childNodes && node.childNodes.length) {
-                var found = this.findFirstVehicleNode(node.childNodes);
-                if (found) return found;
-            }
-        }
-        return null;
-    },
-
-    loadTreeData: function() {
-        var me = this;
-        if (me.treeStore) {
-            me.treeStore.load({
-                callback: function() {
-                    var root = me.treeStore.getRootNode();
-                    if (root) {
-                        root.expandChildren(true, false);
-                        me.tree.getView().refresh();
-                    }
-                }
-            });
-        }
     },
 
     applySearchFilter: function(query) {
@@ -191,7 +216,7 @@ Ext.define('Store.duplicate_online.Module', {
         root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
         root.cascadeBy(function(node) {
             if (node !== root) {
-                var text = (node.get('name') || node.get('text') || '').toLowerCase();
+                var text = (node.get('text') || node.get('name') || '').toLowerCase();
                 if (text.indexOf(lower) !== -1) {
                     node.set('visible', true);
                     var p = node.parentNode;
