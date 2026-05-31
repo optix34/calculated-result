@@ -10,14 +10,14 @@ Ext.define('Store.duplicate_online.Module', {
             iconCls: 'fa fa-copy',
             iconAlign: 'top',
             minimized: true,
-            width: 320,
+            width: 500, // шире, чтобы поместились колонки
             items: [{
                 xtype: 'container',
                 layout: 'vbox',
                 flex: 1,
                 items: [
                     me.buildFilterToolbar(),
-                    me.buildOnlineTree()
+                    me.buildOnlineTreeWithColumns()
                 ]
             }]
         });
@@ -56,22 +56,33 @@ Ext.define('Store.duplicate_online.Module', {
             items: [{
                 text: l('Все'),
                 stateValue: 'all',
+                pressed: true,
+                enableToggle: true,
+                toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 'all'); }
             }, {
                 text: l('Активные'),
                 stateValue: 1,
+                enableToggle: true,
+                toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 1); }
             }, {
                 text: l('Аварии'),
                 stateValue: 2,
+                enableToggle: true,
+                toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 2); }
             }, {
                 text: l('Стоянка'),
                 stateValue: 3,
+                enableToggle: true,
+                toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 3); }
             }, {
                 text: l('Холостой ход'),
                 stateValue: 4,
+                enableToggle: true,
+                toggleGroup: 'statefilter',
                 handler: function(btn) { me.filterByState(btn, 4); }
             }, '->', {
                 xtype: 'textfield',
@@ -84,41 +95,82 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }]
         });
-
-        me.filterButtons = filterBar.items.items.slice(0, 5); // сохраняем кнопки для стилизации
+        me.filterButtons = filterBar.items.items.slice(0, 5);
         return filterBar;
     },
 
-    // Дерево объектов (полный список ТС клиента)
-    buildOnlineTree: function() {
+    // Дерево объектов с колонками (полный список ТС клиента)
+    buildOnlineTreeWithColumns: function() {
         var me = this;
 
+        // Определение колонок (как в оригинальной вкладке Онлайн)
+        var columns = [{
+            xtype: 'treecolumn',
+            text: l('Объекты'),
+            dataIndex: 'text',
+            flex: 2,
+            sortable: false
+        }, {
+            text: l('Статус'),
+            dataIndex: 'state',
+            width: 100,
+            align: 'center',
+            renderer: function(value, meta, record) {
+                if (!record.isLeaf()) return '';
+                var statusText = '';
+                var iconCls = '';
+                switch (value) {
+                    case 1: statusText = l('Активен'); iconCls = 'fa fa-play-circle'; break;
+                    case 2: statusText = l('Авария'); iconCls = 'fa fa-exclamation-triangle'; break;
+                    case 3: statusText = l('Стоянка'); iconCls = 'fa fa-pause-circle'; break;
+                    case 4: statusText = l('Холостой ход'); iconCls = 'fa fa-hourglass-half'; break;
+                    default: statusText = l('Неизвестно'); iconCls = 'fa fa-question-circle';
+                }
+                return '<i class="' + iconCls + '" style="margin-right:5px;"></i>' + statusText;
+            }
+        }, {
+            text: l('Обновлено'),
+            dataIndex: 'last_update',
+            width: 150,
+            renderer: function(value) {
+                if (!value) return '—';
+                // Предполагаем, что значение — timestamp или строка даты
+                return Ext.Date.format(new Date(value * 1000), 'd.m.Y H:i:s');
+            }
+        }, {
+            text: l('Тип оборудования'),
+            dataIndex: 'equip_type',
+            width: 120,
+            renderer: function(value) {
+                return value || '—';
+            }
+        }, {
+            text: l('Скорость'),
+            dataIndex: 'speed',
+            width: 70,
+            align: 'right',
+            renderer: function(value, meta, record) {
+                if (!record.isLeaf() || !value) return '—';
+                return value + ' ' + (window.uom ? window.uom.speed : 'км/ч');
+            }
+        }];
+
+        // Хранилище дерева
         me.treeStore = Ext.create('Ext.data.TreeStore', {
-            root: {
-                expanded: true,
-                children: []
-            },
+            root: { expanded: true, children: [] },
             proxy: {
                 type: 'ajax',
                 url: '/ax/tree.php',
-                extraParams: {
-                    vehs: 1,
-                    state: 1   // по умолчанию "Все"
-                },
+                extraParams: { vehs: 1, state: 1 },
                 reader: {
                     type: 'json',
-                    rootProperty: ''    // ответ — массив групп
+                    rootProperty: ''    // ответ — массив
                 }
             },
             listeners: {
                 load: function(store, node, records) {
+                    // После загрузки применяем поиск (если есть)
                     me.applySearchFilter(me.searchField && me.searchField.getValue());
-                },
-                // Сохраняем исходную копию для клиентской фильтрации (если потребуется)
-                beforeload: function() {
-                    if (!me.originalRoot && me.treeStore.getRootNode().childNodes.length) {
-                        me.originalRoot = me.treeStore.getRootNode().copy();
-                    }
                 }
             }
         });
@@ -130,14 +182,15 @@ Ext.define('Store.duplicate_online.Module', {
             useArrows: true,
             lines: true,
             border: false,
-            hideHeaders: true,
+            columns: columns,
+            hideHeaders: false,
             viewConfig: {
                 loadMask: true,
                 stripeRows: true
             }
         });
 
-        // Сохраняем ссылку на поле поиска
+        // Сохраняем ссылку на поле поиска (находим его в тулбаре)
         me.searchField = Ext.ComponentQuery.query('textfield', me.tree.up())[0];
         return me.tree;
     },
@@ -147,12 +200,6 @@ Ext.define('Store.duplicate_online.Module', {
         var me = this;
         var store = me.treeStore;
         if (!store) return;
-
-        // Активная кнопка (визуальное выделение)
-        Ext.each(me.filterButtons, function(b) {
-            if (b === btn) b.addCls('x-btn-pressed');
-            else b.removeCls('x-btn-pressed');
-        });
 
         // Устанавливаем параметр state в запросе
         if (stateValue === 'all') {
@@ -180,21 +227,23 @@ Ext.define('Store.duplicate_online.Module', {
 
         // Сбрасываем предыдущую фильтрацию поиска (показываем всё, что прошло фильтр по состоянию)
         root.cascadeBy(function(node) {
-            if (node.data.visible === false) {
-                // Если узел был скрыт поиском, возвращаем видимость в исходное состояние
+            if (node.data.hiddenBySearch) {
                 node.set('visible', true);
+                delete node.data.hiddenBySearch;
             }
         });
 
         if (!query || query.length < 2) {
-            // Поиск не активен — ничего не скрываем
             return;
         }
 
         var lowerQuery = query.toLowerCase();
         // Сначала скрываем все узлы, кроме корня
         root.cascadeBy(function(node) {
-            if (node !== root) node.set('visible', false);
+            if (node !== root) {
+                node.set('visible', false);
+                node.data.hiddenBySearch = true;
+            }
         });
 
         // Показываем узлы, у которых текст содержит подстроку, и всех их предков
@@ -203,9 +252,11 @@ Ext.define('Store.duplicate_online.Module', {
                 var text = node.get('text') || node.get('name') || '';
                 if (text.toLowerCase().indexOf(lowerQuery) !== -1) {
                     node.set('visible', true);
+                    delete node.data.hiddenBySearch;
                     var parent = node.parentNode;
                     while (parent && parent !== root) {
                         parent.set('visible', true);
+                        delete parent.data.hiddenBySearch;
                         parent = parent.parentNode;
                     }
                 }
