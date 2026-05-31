@@ -4,6 +4,7 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
+        // Левая панель (вкладка)
         var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
@@ -19,6 +20,7 @@ Ext.define('Store.duplicate_online.Module', {
             }]
         });
 
+        // Правая панель: карта сверху, пустая панель снизу
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
@@ -96,34 +98,6 @@ Ext.define('Store.duplicate_online.Module', {
                     extended: 1
                 },
                 reader: { type: 'json', rootProperty: '' }
-            },
-            listeners: {
-                load: function(store, records, successful) {
-                    if (successful && records.length > 0) {
-                        var firstVehicle = me.findFirstVehicle(records);
-                        if (firstVehicle) {
-                            console.log('=== ДИАГНОСТИКА: поля и значения первого ТС ===');
-                            var data = firstVehicle.data;
-                            var possibleTimeFields = ['last_update', 'last_data', 'last_online', 'last_pos_time', 'updated', 'timestamp', 'server_time', 'last_time', 'time', 'date'];
-                            for (var key in data) {
-                                if (data.hasOwnProperty(key)) {
-                                    var val = data[key];
-                                    // Если значение похоже на timestamp (число от 10^9 до 2^31) или строка с датой
-                                    var isTime = false;
-                                    if (typeof val === 'number' && (val > 1000000000 && val < 9999999999)) isTime = true;
-                                    if (typeof val === 'string' && val.match(/^\d{4}-\d{2}-\d{2}/)) isTime = true;
-                                    if (possibleTimeFields.indexOf(key) !== -1) isTime = true;
-                                    if (isTime || key.indexOf('time') !== -1 || key.indexOf('date') !== -1) {
-                                        console.log('  ' + key + ' : ' + val + ' (возможно, время)');
-                                    } else {
-                                        console.log('  ' + key + ' : ' + val);
-                                    }
-                                }
-                            }
-                            console.log('=================================================');
-                        }
-                    }
-                }
             }
         });
 
@@ -153,32 +127,16 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'last_update',
+                dataIndex: 'created_time',
                 width: 140,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
-                    // Функция для поиска времени в record
-                    var getTime = function(rec) {
-                        var possibleFields = ['last_update', 'last_data', 'last_online', 'last_pos_time', 'updated', 'timestamp', 'server_time', 'last_time', 'time'];
-                        for (var i = 0; i < possibleFields.length; i++) {
-                            var val = rec.get(possibleFields[i]);
-                            if (val) {
-                                if (typeof val === 'number') return val;
-                                if (typeof val === 'string') {
-                                    var parsed = Date.parse(val);
-                                    if (!isNaN(parsed)) return parsed / 1000;
-                                }
-                            }
-                        }
-                        return null;
-                    };
-                    var timeValue = getTime(record);
-                    if (timeValue) {
-                        if (typeof timeValue === 'number') {
-                            if (timeValue > 10000000000) timeValue = timeValue / 1000; // если миллисекунды
-                            return Ext.Date.format(new Date(timeValue * 1000), 'd.m.Y H:i:s');
-                        }
-                        return timeValue;
+                    if (v && typeof v === 'number') {
+                        return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+                    }
+                    var createdDate = record.get('created_date');
+                    if (createdDate && typeof createdDate === 'number') {
+                        return Ext.Date.format(new Date(createdDate * 1000), 'd.m.Y H:i:s');
                     }
                     return '—';
                 }
@@ -196,18 +154,6 @@ Ext.define('Store.duplicate_online.Module', {
             style: 'border: 1px solid #ccc;'
         });
         return me.tree;
-    },
-
-    findFirstVehicle: function(records) {
-        for (var i = 0; i < records.length; i++) {
-            var node = records[i];
-            if (node.isLeaf()) return node;
-            if (node.childNodes && node.childNodes.length) {
-                var found = this.findFirstVehicle(node.childNodes);
-                if (found) return found;
-            }
-        }
-        return null;
     },
 
     applySearchFilter: function(query) {
