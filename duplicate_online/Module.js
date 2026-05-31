@@ -4,7 +4,6 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // ---- Левая панель (вкладка) ----
         var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
@@ -13,14 +12,13 @@ Ext.define('Store.duplicate_online.Module', {
             items: [{
                 region: 'north',
                 height: 40,
-                items: [me.buildToolbar()]   // только поиск
+                items: [me.buildToolbar()]
             }, {
                 region: 'center',
                 items: [me.buildTree()]
             }]
         });
 
-        // ---- Правая панель (карта + пусто) ----
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
@@ -60,7 +58,6 @@ Ext.define('Store.duplicate_online.Module', {
         setTimeout(function() { me.initMap(); }, 200);
     },
 
-    // Тулбар только с поиском
     buildToolbar: function() {
         var me = this;
         return Ext.create('Ext.toolbar.Toolbar', {
@@ -104,27 +101,27 @@ Ext.define('Store.duplicate_online.Module', {
             columns: [{
                 xtype: 'treecolumn',
                 text: 'Объекты',
-                dataIndex: 'name',        // в данных используется поле name
+                dataIndex: 'name',
                 flex: 2,
                 renderer: function(v, meta, record) {
                     return v || record.get('text') || record.get('id') || '—';
                 }
             }, {
                 text: 'Статус',
-                dataIndex: 'active',      // активен/неактивен (1/0) + on
+                dataIndex: 'active',
                 width: 100,
                 renderer: function(v, meta, record) {
                     if (!record.isLeaf()) return '';
                     var active = record.get('active');
                     var on = record.get('on');
                     if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
-                    if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Онлайн выкл.</span>';
+                    if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Офлайн</span>';
                     if (active === 0) return '<span style="color:gray;">◯ Неактивен</span>';
                     return '—';
                 }
             }, {
                 text: 'Обновление',
-                dataIndex: 'created_time', // timestamp создания/последнего обновления
+                dataIndex: 'created_time',
                 width: 140,
                 renderer: function(v) {
                     if (!v) return '—';
@@ -133,14 +130,21 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Тип оборудования',
-                dataIndex: 'typename',     // например, "Static", "Bus"
-                width: 120,
-                renderer: function(v) {
-                    return v || '—';
+                dataIndex: 'info',          // используем поле info как основной источник
+                width: 160,
+                renderer: function(v, meta, record) {
+                    if (!record.isLeaf()) return '';
+                    // Если info не пустое – показываем его
+                    if (v && v.trim) return v;
+                    // Иначе преобразуем typename в понятный текст
+                    var typename = record.get('typename');
+                    if (typename === 'Static') return 'Статический объект';
+                    if (typename === 'Bus') return 'Автобус';
+                    return typename || record.get('configuration') || '—';
                 }
             }, {
                 text: 'IMEI',
-                dataIndex: 'uniqid',       // уникальный идентификатор (IMEI)
+                dataIndex: 'uniqid',
                 width: 150,
                 renderer: function(v) {
                     return v || '—';
@@ -151,7 +155,6 @@ Ext.define('Store.duplicate_online.Module', {
         return me.tree;
     },
 
-    // Поиск по имени объекта (клиентский)
     applySearchFilter: function(query) {
         var root = this.treeStore.getRootNode();
         if (!root) return;
@@ -171,7 +174,6 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Инициализация карты в правой верхней панели
     initMap: function() {
         var container = document.getElementById('dup-online-map');
         if (!container) return;
