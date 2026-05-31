@@ -130,17 +130,10 @@ Ext.define('Store.duplicate_online.Module', {
                 }
             }, {
                 text: 'Тип оборудования',
-                dataIndex: 'info',          // используем поле info как основной источник
-                width: 160,
-                renderer: function(v, meta, record) {
-                    if (!record.isLeaf()) return '';
-                    // Если info не пустое – показываем его
-                    if (v && v.trim) return v;
-                    // Иначе преобразуем typename в понятный текст
-                    var typename = record.get('typename');
-                    if (typename === 'Static') return 'Статический объект';
-                    if (typename === 'Bus') return 'Автобус';
-                    return typename || record.get('configuration') || '—';
+                dataIndex: 'configuration',
+                width: 100,
+                renderer: function(v) {
+                    return v || '—';
                 }
             }, {
                 text: 'IMEI',
