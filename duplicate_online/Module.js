@@ -16,7 +16,9 @@ Ext.define('Store.duplicate_online.Module', {
                 items: [me.buildToolbar()]
             }, {
                 region: 'center',
-                items: [me.buildTree()]
+                itemId: 'treeContainer',
+                layout: 'fit'
+                // дерево будет добавлено позже
             }]
         });
 
@@ -41,12 +43,11 @@ Ext.define('Store.duplicate_online.Module', {
         if (skeleton.navigation.setActiveTab) skeleton.navigation.setActiveTab(navTab);
         if (skeleton.mapframe) skeleton.mapframe.add(mainPanel);
 
-        // Принудительное обновление макетов и загрузка данных
         setTimeout(function() {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
-            me.loadFullData(); // Запускаем новую комбинированную загрузку данных
+            me.loadFullData(navTab); // передаём navTab для последующего добавления дерева
         }, 100);
 
         setTimeout(function() { me.initMap(); }, 200);
@@ -69,21 +70,8 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Поиск первого транспортного средства в дереве
-    findFirstVehicle: function(records) {
-        for (var i = 0; i < records.length; i++) {
-            var node = records[i];
-            if (node.isLeaf()) return node;
-            if (node.childNodes && node.childNodes.length) {
-                var found = this.findFirstVehicle(node.childNodes);
-                if (found) return found;
-            }
-        }
-        return null;
-    },
-
-    // Загрузка и объединение данных из двух источников
-    loadFullData: function() {
+    // Загрузка данных из двух источников
+    loadFullData: function(navTab) {
         var me = this;
         Ext.Ajax.request({
             url: '/backend/ax/tree.php',
@@ -103,11 +91,11 @@ Ext.define('Store.duplicate_online.Module', {
                     },
                     success: function(statusResponse) {
                         var statusData = Ext.decode(statusResponse.responseText);
-                        me.processAndDisplayData(treeData, statusData);
+                        me.processAndDisplayData(treeData, statusData, navTab);
                     },
                     failure: function() {
                         console.error('Не удалось загрузить статусные данные, отображаем только дерево.');
-                        me.processAndDisplayData(treeData, {});
+                        me.processAndDisplayData(treeData, {}, navTab);
                     }
                 });
             },
@@ -118,62 +106,96 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Основной движок: объединяет дерево объектов с актуальными статусами
-    processAndDisplayData: function(treeData, statusData) {
+    // Построение дерева с объединёнными данными
+    processAndDisplayData: function(treeData, statusData, navTab) {
         var me = this;
         if (!me.treeStore) {
             me.treeStore = Ext.create('Ext.data.TreeStore', { root: { expanded: true, children: [] } });
             me.tree = Ext.create('Ext.tree.Panel', {
-                store: me.treeStore, rootVisible: false,
+                store: me.treeStore,
+                rootVisible: false,
                 columns: [{
-                    xtype: 'treecolumn', text: 'Объекты', dataIndex: 'name', flex: 2,
-                    renderer: function(v, meta, record) { return v || record.get('text') || record.get('id') || '—'; }
-                }, { text: 'Статус', dataIndex: 'active', width: 100, renderer: me.renderStatus },
-                  { text: 'Обновление', dataIndex: 'last_connection', width: 140, renderer: me.renderDateTime },
-                  { text: 'Тип оборудования', dataIndex: 'configuration', width: 100,
-                    renderer: function(v) { return v || '—'; } },
-                  { text: 'IMEI', dataIndex: 'uniqid', width: 150,
-                    renderer: function(v) { return v || '—'; } }],
+                    xtype: 'treecolumn',
+                    text: 'Объекты',
+                    dataIndex: 'name',
+                    flex: 2,
+                    renderer: function(v, meta, record) {
+                        return v || record.get('text') || record.get('id') || '—';
+                    }
+                }, {
+                    text: 'Статус',
+                    dataIndex: 'active',
+                    width: 100,
+                    renderer: function(v, meta, record) {
+                        if (!record.isLeaf()) return '';
+                        var active = record.get('active');
+                        var on = record.get('on');
+                        if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
+                        if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Офлайн</span>';
+                        if (active === 0) return '<span style="color:gray;">◯ Неактивен</span>';
+                        return '—';
+                    }
+                }, {
+                    text: 'Обновление',
+                    dataIndex: 'last_connection',
+                    width: 140,
+                    renderer: function(v) {
+                        if (!v) return '—';
+                        var ts = (typeof v === 'number') ? v : parseInt(v);
+                        if (isNaN(ts)) return v;
+                        if (ts > 10000000000) ts = ts / 1000;
+                        return Ext.Date.format(new Date(ts * 1000), 'd.m.Y H:i:s');
+                    }
+                }, {
+                    text: 'Тип оборудования',
+                    dataIndex: 'configuration',
+                    width: 100,
+                    renderer: function(v) { return v || '—'; }
+                }, {
+                    text: 'IMEI',
+                    dataIndex: 'uniqid',
+                    width: 150,
+                    renderer: function(v) { return v || '—'; }
+                }],
                 style: 'border: 1px solid #ccc;'
             });
-            var navPanel = Ext.ComponentQuery.query('panel[title="Дубликат Онлайн"]')[0];
-            if (navPanel && navPanel.items && navPanel.items.getAt(0) && navPanel.items.getAt(0).items) {
-                navPanel.items.getAt(0).items.add(me.tree);
-                navPanel.updateLayout();
+            // Добавляем дерево в контейнер левой панели
+            var container = navTab.down('#treeContainer');
+            if (container) {
+                container.add(me.tree);
+                navTab.updateLayout();
             }
         }
 
         var root = me.treeStore.getRootNode();
         root.removeAll();
-        // Строим дерево, сразу обогащая узлы данными из статусного ответа
         me.buildTreeNodes(root, treeData, statusData);
         root.expandChildren(true, false);
         if (me.tree.getView()) me.tree.getView().refresh();
         if (me.tree.setHeight) me.tree.setHeight(navTab.getHeight() - 50);
     },
 
-    // Рекурсивное построение узлов дерева
+    // Рекурсивное построение узлов
     buildTreeNodes: function(parentNode, children, statusData) {
         if (!Ext.isArray(children)) children = [children];
         var me = this;
         Ext.each(children, function(item) {
-            // Определяем, является ли узел транспортным средством
             var isVehicle = item.vehid && item.active !== undefined;
             var nodeConfig = {
                 name: item.name || item.text || item.id || '—',
                 leaf: isVehicle || !item.children || item.children.length === 0,
                 expanded: false,
-                // Копируем основные поля
-                id: item.id, vehid: item.vehid, active: item.active, on: item.on,
-                configuration: item.configuration, uniqid: item.uniqid
+                id: item.id,
+                vehid: item.vehid,
+                active: item.active,
+                on: item.on,
+                configuration: item.configuration,
+                uniqid: item.uniqid
             };
-            // Если есть статусные данные для данного ТС, обогащаем узел
+            // Если есть статусные данные для этого ТС
             if (statusData && statusData[item.vehid]) {
-                Ext.apply(nodeConfig, {
-                    last_connection: statusData[item.vehid].last_connection,
-                    last_data: statusData[item.vehid].last_data,
-                    status_text: statusData[item.vehid].status_text
-                });
+                nodeConfig.last_connection = statusData[item.vehid].last_connection ||
+                                               statusData[item.vehid].last_data;
             }
             var node = parentNode.appendChild(nodeConfig);
             if (item.children && item.children.length) {
@@ -182,30 +204,38 @@ Ext.define('Store.duplicate_online.Module', {
         });
     },
 
-    // Рендерер статуса
-    renderStatus: function(v, meta, record) {
-        if (!record.isLeaf()) return '';
-        var active = record.get('active');
-        var on = record.get('on');
-        if (active === 1 && on === 1) return '<span style="color:green;">● Активен</span>';
-        if (active === 1 && on === 0) return '<span style="color:orange;">⏸ Офлайн</span>';
-        if (active === 0) return '<span style="color:gray;">◯ Неактивен</span>';
-        return '—';
+    // Поиск по названию объекта
+    applySearchFilter: function(query) {
+        var root = this.treeStore ? this.treeStore.getRootNode() : null;
+        if (!root) return;
+        root.cascadeBy(function(node) { node.set('visible', true); });
+        if (!query || query.length < 2) return;
+        var lower = query.toLowerCase();
+        root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
+        root.cascadeBy(function(node) {
+            if (node !== root) {
+                var text = (node.get('name') || node.get('text') || '').toLowerCase();
+                if (text.indexOf(lower) !== -1) {
+                    node.set('visible', true);
+                    var p = node.parentNode;
+                    while (p && p !== root) { p.set('visible', true); p = p.parentNode; }
+                }
+            }
+        });
     },
 
-    // Рендерер даты и времени (универсальный)
-    renderDateTime: function(v) {
-        if (!v) return '—';
-        var timestamp = null;
-        if (typeof v === 'number') timestamp = v;
-        else if (typeof v === 'string') timestamp = parseInt(v);
-        if (timestamp && !isNaN(timestamp)) {
-            if (timestamp > 10000000000) timestamp = timestamp / 1000;
-            return Ext.Date.format(new Date(timestamp * 1000), 'd.m.Y H:i:s');
+    // Инициализация карты в правой верхней панели
+    initMap: function() {
+        var container = document.getElementById('dup-online-map');
+        if (!container) return;
+        if (window.MapContainer) {
+            this.map = new MapContainer('dup_map');
+            this.map.init(55.75, 37.65, 10, 'dup-online-map', false);
+        } else if (typeof L !== 'undefined') {
+            this.map = L.map('dup-online-map').setView([55.75, 37.65], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(this.map);
+        } else {
+            container.innerHTML = '<div style="padding:20px;">Карта не доступна</div>';
         }
-        return v;
-    },
-
-    // ... (остальные методы applySearchFilter, initMap, buildToolbar без изменений) ...
-    // Важно: скопируйте и сюда их содержимое из вашего текущего файла для полноты.
+    }
 });
