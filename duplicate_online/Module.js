@@ -4,17 +4,25 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Создаём левую панель (вкладка в навигации)
-        var navTab = Ext.create('Ext.panel.Panel', {
+        // 1. Левая панель (дубликат Онлайн) с использованием фирменного компонента
+        var navTab = Ext.create('Pilot.utils.LeftBarPanel', {
             title: l('Дубликат Онлайн'),
             iconCls: 'fa fa-copy',
+            iconAlign: 'top',
+            minimized: true,
             width: 320,
-            layout: 'vbox',
-            border: false,
-            items: [me.buildFilterToolbar(), me.buildOnlineTree()]
+            items: [{
+                xtype: 'container',
+                layout: 'vbox',
+                flex: 1,
+                items: [
+                    me.buildFilterToolbar(),
+                    me.buildOnlineTree()
+                ]
+            }]
         });
 
-        // Создаём правую панель (разделена по горизонтали)
+        // 2. Правая панель (разделена по горизонтали на две пустые области)
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             border: false,
@@ -22,63 +30,69 @@ Ext.define('Store.duplicate_online.Module', {
                 xtype: 'panel',
                 flex: 1,
                 bodyPadding: 10,
-                html: '<div style="text-align:center; color:#888;">Верхняя панель (пусто)</div>'
+                html: '<div style="text-align:center; color:#aaa;">Верхняя панель (пусто)</div>',
+                cls: 'x-panel-default-framed'
             }, {
                 xtype: 'panel',
                 flex: 1,
                 bodyPadding: 10,
-                html: '<div style="text-align:center; color:#888;">Нижняя панель (пусто)</div>'
+                html: '<div style="text-align:center; color:#aaa;">Нижняя панель (пусто)</div>',
+                cls: 'x-panel-default-framed'
             }]
         });
 
-        // Связываем
+        // Связываем левую вкладку с правой областью
         navTab.map_frame = mainPanel;
 
-        // Добавляем в левую навигацию
-        if (skeleton && skeleton.navigation) {
-            skeleton.navigation.add(navTab);
-        } else {
-            Ext.log.error('skeleton.navigation not found');
-            return;
-        }
-
-        // Добавляем основную панель в mapframe (или map_frame)
-        var mapframe = skeleton.mapframe || skeleton.map_frame;
-        if (mapframe && mapframe.add) {
-            mapframe.add(mainPanel);
-        } else {
-            Ext.log.error('skeleton.mapframe/map_frame not found');
-        }
+        // Добавляем в интерфейс PILOT
+        skeleton.navigation.add(navTab);
+        skeleton.mapframe.add(mainPanel);
     },
 
-    // Панель кнопок фильтрации
+    // Панель кнопок фильтрации по состоянию (как в оригинале "Онлайн")
     buildFilterToolbar: function() {
         var me = this;
-        return Ext.create('Ext.toolbar.Toolbar', {
-            items: [
-                { text: l('Все'),     handler: function() { me.filterTreeByState('all'); } },
-                { text: l('Активные'),handler: function() { me.filterTreeByState(1); } },
-                { text: l('Аварии'),  handler: function() { me.filterTreeByState(2); } },
-                { text: l('Стоянка'), handler: function() { me.filterTreeByState(3); } },
-                { text: l('Холостой'),handler: function() { me.filterTreeByState(4); } },
-                '->',
-                {
-                    xtype: 'textfield',
-                    emptyText: l('Поиск...'),
-                    enableKeyEvents: true,
-                    listeners: {
-                        keyup: function(field) {
-                            me.applySearchFilter(field.getValue());
-                        }
+        var filterBar = Ext.create('Ext.toolbar.Toolbar', {
+            items: [{
+                text: l('Все'),
+                stateValue: 'all',
+                handler: function(btn) { me.filterByState(btn, 'all'); }
+            }, {
+                text: l('Активные'),
+                stateValue: 1,
+                handler: function(btn) { me.filterByState(btn, 1); }
+            }, {
+                text: l('Аварии'),
+                stateValue: 2,
+                handler: function(btn) { me.filterByState(btn, 2); }
+            }, {
+                text: l('Стоянка'),
+                stateValue: 3,
+                handler: function(btn) { me.filterByState(btn, 3); }
+            }, {
+                text: l('Холостой ход'),
+                stateValue: 4,
+                handler: function(btn) { me.filterByState(btn, 4); }
+            }, '->', {
+                xtype: 'textfield',
+                emptyText: l('Поиск...'),
+                enableKeyEvents: true,
+                listeners: {
+                    keyup: function(field) {
+                        me.applySearchFilter(field.getValue());
                     }
                 }
-            ]
+            }]
         });
+
+        me.filterButtons = filterBar.items.items.slice(0, 5); // сохраняем кнопки для стилизации
+        return filterBar;
     },
 
-    // Дерево объектов
+    // Дерево объектов (полный список ТС клиента)
     buildOnlineTree: function() {
         var me = this;
+
         me.treeStore = Ext.create('Ext.data.TreeStore', {
             root: {
                 expanded: true,
@@ -89,18 +103,22 @@ Ext.define('Store.duplicate_online.Module', {
                 url: '/ax/tree.php',
                 extraParams: {
                     vehs: 1,
-                    state: 1   // по умолчанию "все"
+                    state: 1   // по умолчанию "Все"
                 },
                 reader: {
                     type: 'json',
-                    rootProperty: ''   // данные приходят как массив
+                    rootProperty: ''    // ответ — массив групп
                 }
             },
             listeners: {
                 load: function(store, node, records) {
-                    me.originalRoot = store.getRootNode().copy(); // сохраняем копию для фильтрации
-                    me.filterTreeByState(me.currentState || 'all');
-                    me.applySearchFilter(me.searchQuery);
+                    me.applySearchFilter(me.searchField && me.searchField.getValue());
+                },
+                // Сохраняем исходную копию для клиентской фильтрации (если потребуется)
+                beforeload: function() {
+                    if (!me.originalRoot && me.treeStore.getRootNode().childNodes.length) {
+                        me.originalRoot = me.treeStore.getRootNode().copy();
+                    }
                 }
             }
         });
@@ -111,86 +129,65 @@ Ext.define('Store.duplicate_online.Module', {
             rootVisible: false,
             useArrows: true,
             lines: true,
-            border: false
+            border: false,
+            hideHeaders: true,
+            viewConfig: {
+                loadMask: true,
+                stripeRows: true
+            }
         });
 
+        // Сохраняем ссылку на поле поиска
+        me.searchField = Ext.ComponentQuery.query('textfield', me.tree.up())[0];
         return me.tree;
     },
 
-    // Фильтрация по состоянию (state)
-    currentState: 'all',
-    filterTreeByState: function(stateValue) {
-        this.currentState = stateValue;
-        if (!this.treeStore) return;
-
-        var store = this.treeStore;
-        var root = store.getRootNode();
-
-        if (!this.originalRoot) {
-            // Если ещё нет копии, перезагрузим с новым параметром
-            store.getProxy().setExtraParam('state', stateValue === 'all' ? 1 : stateValue);
-            store.load();
-            return;
-        }
-
-        // Восстанавливаем из копии
-        root.removeAll();
-        var copyRoot = this.originalRoot.copy();
-        Ext.each(copyRoot.childNodes, function(child) {
-            root.appendChild(child.copy());
-        });
-
-        // Рекурсивно удаляем узлы, у которых state не соответствует
+    // Фильтрация по состоянию (state) через перезагрузку дерева
+    filterByState: function(btn, stateValue) {
         var me = this;
-        function filterNode(node) {
-            var keep = false;
-            if (node.get('leaf')) {
-                // Транспортное средство
-                var st = node.get('state');
-                if (stateValue === 'all') keep = true;
-                else if (stateValue === 1 && st === 1) keep = true;
-                else if (stateValue === 2 && st === 2) keep = true;
-                else if (stateValue === 3 && st === 3) keep = true;
-                else if (stateValue === 4 && st === 4) keep = true;
-            } else {
-                // Группа – проверяем детей
-                var childKeep = false;
-                node.childNodes.forEach(function(child) {
-                    if (filterNode(child)) childKeep = true;
-                });
-                keep = childKeep;
-            }
-            node.set('visible', keep);
-            if (!keep) {
-                node.remove();
-            }
-            return keep;
-        }
+        var store = me.treeStore;
+        if (!store) return;
 
-        root.childNodes.forEach(function(child) {
-            filterNode(child);
+        // Активная кнопка (визуальное выделение)
+        Ext.each(me.filterButtons, function(b) {
+            if (b === btn) b.addCls('x-btn-pressed');
+            else b.removeCls('x-btn-pressed');
         });
 
-        // Применить поиск
-        this.applySearchFilter(this.searchQuery);
+        // Устанавливаем параметр state в запросе
+        if (stateValue === 'all') {
+            store.getProxy().setExtraParam('state', 1);
+        } else {
+            store.getProxy().setExtraParam('state', stateValue);
+        }
+
+        // Перезагружаем дерево
+        store.load({
+            callback: function() {
+                me.applySearchFilter(me.searchField && me.searchField.getValue());
+            }
+        });
     },
 
-    // Поиск по тексту
-    searchQuery: '',
+    // Клиентский поиск по имени узла (регистронезависимый)
     applySearchFilter: function(query) {
-        this.searchQuery = query;
-        if (!this.treeStore) return;
+        var me = this;
+        var store = me.treeStore;
+        if (!store) return;
 
-        var store = this.treeStore;
         var root = store.getRootNode();
+        if (!root) return;
+
+        // Сбрасываем предыдущую фильтрацию поиска (показываем всё, что прошло фильтр по состоянию)
+        root.cascadeBy(function(node) {
+            if (node.data.visible === false) {
+                // Если узел был скрыт поиском, возвращаем видимость в исходное состояние
+                node.set('visible', true);
+            }
+        });
 
         if (!query || query.length < 2) {
-            // Показываем все узлы, которые visible (уже отфильтрованы по состоянию)
-            root.cascadeBy(function(node) {
-                if (node.get('visible') !== false) {
-                    node.set('visible', true);
-                }
-            });
+            // Поиск не активен — ничего не скрываем
             return;
         }
 
@@ -200,13 +197,12 @@ Ext.define('Store.duplicate_online.Module', {
             if (node !== root) node.set('visible', false);
         });
 
-        // Показываем узлы, у которых текст содержит подстроку
+        // Показываем узлы, у которых текст содержит подстроку, и всех их предков
         root.cascadeBy(function(node) {
             if (node !== root) {
                 var text = node.get('text') || node.get('name') || '';
                 if (text.toLowerCase().indexOf(lowerQuery) !== -1) {
                     node.set('visible', true);
-                    // Показать всех предков
                     var parent = node.parentNode;
                     while (parent && parent !== root) {
                         parent.set('visible', true);
