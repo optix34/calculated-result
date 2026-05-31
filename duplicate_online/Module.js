@@ -2,62 +2,78 @@ Ext.define('Store.duplicate_online.Module', {
     extend: 'Ext.Component',
 
     initModule: function() {
-        let me = this;
-        console.log('[duplicate_online] initModule started');
+        var me = this;
 
-        // Левая панель
-        let navTab = Ext.create('Ext.panel.Panel', {
+        // ---- 1. Левая панель (вкладка) ----
+        var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
-            width: 750,
-            layout: 'vbox',
-            items: [me.buildToolbar(), me.buildTree()]
+            width: 700,
+            layout: 'border',  // используем border для надёжности
+            items: [{
+                region: 'north',
+                height: 40,
+                items: [me.buildToolbar()]
+            }, {
+                region: 'center',
+                items: [me.buildTree()]
+            }]
         });
 
-        // Правая панель
-        let mainPanel = Ext.create('Ext.panel.Panel', {
+        // ---- 2. Правая панель (карта + пусто) ----
+        var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
                 xtype: 'panel',
                 flex: 1,
                 layout: 'fit',
-                html: '<div id="duplicate-online-map" style="width:100%;height:100%;"></div>'
+                html: '<div id="dup-online-map" style="width:100%;height:100%;"></div>'
             }, {
                 xtype: 'panel',
                 flex: 1,
-                html: '<div style="text-align:center; padding:20px;">Нижняя панель (пусто)</div>'
+                bodyPadding: 10,
+                html: '<div style="text-align:center;">Нижняя панель (пусто)</div>'
             }]
         });
 
-        mainPanel.on('afterrender', function() {
-            me.initMap();
-        }, me, { single: true });
-
+        // ---- 3. Связь и добавление ----
         navTab.map_frame = mainPanel;
-
-        // Добавляем вкладку в левую навигацию
         skeleton.navigation.add(navTab);
-        console.log('[duplicate_online] Панель добавлена в navigation');
-
-        // ПРИНУДИТЕЛЬНО АКТИВИРУЕМ ВКЛАДКУ
-        skeleton.navigation.setActiveTab(navTab);
-
-        let mapframe = skeleton.mapframe || skeleton.map_frame;
-        if (mapframe) {
-            mapframe.add(mainPanel);
-            console.log('[duplicate_online] Панель добавлена в mapframe');
+        // Активируем вкладку принудительно
+        if (skeleton.navigation.setActiveTab) {
+            skeleton.navigation.setActiveTab(navTab);
+        } else if (skeleton.navigation.layout.setActiveItem) {
+            skeleton.navigation.layout.setActiveItem(navTab);
         }
+        if (skeleton.mapframe) skeleton.mapframe.add(mainPanel);
 
-        // Принудительно загружаем данные дерева и раскрываем корень
-        me.treeStore.on('load', function() {
-            console.log('[duplicate_online] Дерево загружено, узлов:', me.treeStore.getRootNode().childNodes.length);
-            me.treeStore.getRootNode().expandChildren(true, false);
-        });
-        me.treeStore.load();
+        // ---- 4. Принудительное обновление макетов и загрузка данных ----
+        setTimeout(function() {
+            skeleton.navigation.updateLayout();
+            if (skeleton.mapframe) skeleton.mapframe.updateLayout();
+            navTab.updateLayout();
+            // Загружаем дерево
+            me.treeStore.load({
+                callback: function() {
+                    // Разворачиваем корневой узел
+                    var root = me.treeStore.getRootNode();
+                    if (root) {
+                        root.expandChildren(true, false);
+                        // Принудительно обновляем представление дерева
+                        me.tree.getView().refresh();
+                        // Устанавливаем видимую высоту (на случай, если высота нулевая)
+                        me.tree.setHeight(navTab.getHeight() - 50);
+                    }
+                }
+            });
+        }, 100);
+
+        // Карта
+        setTimeout(function() { me.initMap(); }, 200);
     },
 
     buildToolbar: function() {
-        let me = this;
+        var me = this;
         return Ext.create('Ext.toolbar.Toolbar', {
             items: [{
                 text: 'Все', enableToggle: true, toggleGroup: 'statefilter', pressed: true,
@@ -82,7 +98,7 @@ Ext.define('Store.duplicate_online.Module', {
     },
 
     buildTree: function() {
-        let me = this;
+        var me = this;
         me.treeStore = Ext.create('Ext.data.TreeStore', {
             root: { expanded: true, children: [] },
             proxy: {
@@ -92,50 +108,40 @@ Ext.define('Store.duplicate_online.Module', {
                 reader: { type: 'json', rootProperty: '' }
             }
         });
-
         me.tree = Ext.create('Ext.tree.Panel', {
-            flex: 1,
             store: me.treeStore,
             rootVisible: false,
-            useArrows: true,
             columns: [{
-                xtype: 'treecolumn', text: 'Объекты', dataIndex: 'text', flex: 1
-            }, {
-                text: 'Статус', dataIndex: 'state', width: 100,
-                renderer: function(v, m, rec) {
-                    if (!rec.isLeaf()) return '';
-                    switch(v) {
-                        case 1: return '<span style="color:green;">● Активен</span>';
-                        case 2: return '<span style="color:red;">⚠ Авария</span>';
-                        case 3: return '<span style="color:orange;">⏸ Стоянка</span>';
-                        case 4: return '<span style="color:gray;">⏳ Холостой ход</span>';
-                        default: return '—';
-                    }
-                }
-            }]
+                xtype: 'treecolumn',
+                text: 'Объекты',
+                dataIndex: 'text',
+                flex: 1
+            }],
+            // Временно добавим рамку, чтобы убедиться, что дерево присутствует
+            style: 'border: 2px solid red;'
         });
         return me.tree;
     },
 
     filterByState: function(state) {
-        let proxy = this.treeStore.getProxy();
+        var proxy = this.treeStore.getProxy();
         proxy.setExtraParam('state', state === 'all' ? 1 : state);
         this.treeStore.load();
     },
 
     applySearchFilter: function(query) {
-        let root = this.treeStore.getRootNode();
+        var root = this.treeStore.getRootNode();
         if (!root) return;
-        root.cascadeBy(node => node.set('visible', true));
+        root.cascadeBy(function(node) { node.set('visible', true); });
         if (!query || query.length < 2) return;
-        let lower = query.toLowerCase();
-        root.cascadeBy(node => { if (node !== root) node.set('visible', false); });
-        root.cascadeBy(node => {
+        var lower = query.toLowerCase();
+        root.cascadeBy(function(node) { if (node !== root) node.set('visible', false); });
+        root.cascadeBy(function(node) {
             if (node !== root) {
-                let text = (node.get('text') || '').toLowerCase();
+                var text = (node.get('text') || '').toLowerCase();
                 if (text.indexOf(lower) !== -1) {
                     node.set('visible', true);
-                    let p = node.parentNode;
+                    var p = node.parentNode;
                     while (p && p !== root) { p.set('visible', true); p = p.parentNode; }
                 }
             }
@@ -143,14 +149,13 @@ Ext.define('Store.duplicate_online.Module', {
     },
 
     initMap: function() {
-        let container = document.getElementById('duplicate-online-map');
+        var container = document.getElementById('dup-online-map');
         if (!container) return;
         if (window.MapContainer) {
             this.map = new MapContainer('dup_map');
-            this.map.init(55.75, 37.65, 10, 'duplicate-online-map', false);
-            console.log('[duplicate_online] Карта создана');
+            this.map.init(55.75, 37.65, 10, 'dup-online-map', false);
         } else if (typeof L !== 'undefined') {
-            this.map = L.map('duplicate-online-map').setView([55.75, 37.65], 10);
+            this.map = L.map('dup-online-map').setView([55.75, 37.65], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(this.map);
         } else {
             container.innerHTML = '<div style="padding:20px;">Карта не доступна</div>';
