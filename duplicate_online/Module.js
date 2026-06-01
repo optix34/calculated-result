@@ -4,19 +4,21 @@ Ext.define('Store.duplicate_online.Module', {
     initModule: function() {
         var me = this;
 
-        // Левая панель (вкладка)
         var navTab = Ext.create('Ext.panel.Panel', {
             title: 'Дубликат Онлайн',
             iconCls: 'fa fa-copy',
             width: 950,
-            layout: 'vbox',
-            items: [
-                me.buildToolbar(),
-                me.buildTree()
-            ]
+            layout: 'border',
+            items: [{
+                region: 'north',
+                height: 40,
+                items: [me.buildToolbar()]
+            }, {
+                region: 'center',
+                items: [me.buildTree()]
+            }]
         });
 
-        // Правая панель: карта сверху, пусто снизу
         var mainPanel = Ext.create('Ext.panel.Panel', {
             layout: 'vbox',
             items: [{
@@ -41,6 +43,16 @@ Ext.define('Store.duplicate_online.Module', {
             skeleton.navigation.updateLayout();
             if (skeleton.mapframe) skeleton.mapframe.updateLayout();
             navTab.updateLayout();
+            me.treeStore.load({
+                callback: function() {
+                    var root = me.treeStore.getRootNode();
+                    if (root) {
+                        root.expandChildren(true, false);
+                        me.tree.getView().refresh();
+                        me.tree.setHeight(navTab.getHeight() - 50);
+                    }
+                }
+            });
         }, 100);
 
         setTimeout(function() { me.initMap(); }, 200);
@@ -75,7 +87,9 @@ Ext.define('Store.duplicate_online.Module', {
                     state: 1,
                     objects: 1,
                     vehicles: 1,
-                    full: 1
+                    full: 1,
+                    units: 1,
+                    devs: 1
                 },
                 reader: { type: 'json', rootProperty: '' }
             }
@@ -84,8 +98,6 @@ Ext.define('Store.duplicate_online.Module', {
         me.tree = Ext.create('Ext.tree.Panel', {
             store: me.treeStore,
             rootVisible: false,
-            useArrows: true,
-            lines: true,
             columns: [{
                 xtype: 'treecolumn',
                 text: 'Объекты',
@@ -113,33 +125,31 @@ Ext.define('Store.duplicate_online.Module', {
                 width: 140,
                 renderer: function(v) {
                     if (!v) return '—';
-                    var ts = (typeof v === 'number') ? v : parseInt(v, 10);
-                    if (isNaN(ts)) return v;
-                    if (ts > 10000000000) ts = ts / 1000;
-                    return Ext.Date.format(new Date(ts * 1000), 'd.m.Y H:i:s');
+                    if (typeof v === 'number') return Ext.Date.format(new Date(v * 1000), 'd.m.Y H:i:s');
+                    return v;
                 }
             }, {
                 text: 'Тип оборудования',
                 dataIndex: 'configuration',
                 width: 100,
-                renderer: function(v) { return v || '—'; }
+                renderer: function(v) {
+                    return v || '—';
+                }
             }, {
                 text: 'IMEI',
                 dataIndex: 'uniqid',
                 width: 150,
-                renderer: function(v) { return v || '—'; }
+                renderer: function(v) {
+                    return v || '—';
+                }
             }],
-            viewConfig: {
-                stripeRows: true,
-                loadMask: true,
-                emptyText: 'Загрузка данных...'
-            }
+            style: 'border: 1px solid #ccc;'
         });
         return me.tree;
     },
 
     applySearchFilter: function(query) {
-        var root = this.treeStore ? this.treeStore.getRootNode() : null;
+        var root = this.treeStore.getRootNode();
         if (!root) return;
         root.cascadeBy(function(node) { node.set('visible', true); });
         if (!query || query.length < 2) return;
